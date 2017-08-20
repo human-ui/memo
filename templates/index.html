@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="https://unpkg.com/wingcss"/>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script
+        src="https://code.jquery.com/jquery-3.2.1.min.js"
+        integrity="sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4="
+        crossorigin="anonymous">
+    </script>
+</head>
+<body>
+    <h1>Experiments</h1>
+
+    <input type="search" class="search" placeholder="Filter" tabindex="1">
+
+    {{ table|safe }}
+
+    <script>
+        var isDirty = false;
+
+         // warn about unsaved changes
+        $(window).on('beforeunload', function(){
+            if (isDirty) return 'Some changes were not saved.';
+            else return undefined;
+        });
+
+        // track changes
+        var cellValue;
+        $('td').on('focus', function(event) {
+            cellValue = $(this).text();
+        });
+
+        // save changes
+        $('td').on('blur', function(event) {
+            if ($(this).text() != cellValue) {
+                isDirty = true;
+                // var rowIndex = $(this).parent().index();
+                var rowName = $(this).parent().find('th').text(); // children().first().text();
+                var col = $(this).parent().children().index($(this));
+                var colName = $(this).closest("table").find("th").eq(col).text();
+                $.post("/",
+                    { data: JSON.stringify([rowName, colName, $(this).text()]) },
+                    function() { isDirty = false; }
+                );
+            }
+        });
+
+        // filter
+        $('input').on('keyup',function(){
+            var searchTerm = $(this).val().toLowerCase();
+            $('table tbody tr').each(function(){
+                var lineStr = $(this).text().toLowerCase();
+                if(lineStr.indexOf(searchTerm) === -1) {
+                    $(this).hide();
+                }
+                else {
+                    $(this).show();
+                }
+            });
+        });
+
+        function format_rows(selector) {
+            var tag_col = $("th:contains('tag')").index();
+            var descr_col = $("th:contains('description')").index();
+            selector.each(function() {
+                $(this).children().eq(tag_col).attr("contenteditable", true);
+                $(this).children().eq(descr_col).attr("contenteditable", true);
+                $(this).children().eq(0).attr("class", "index");
+                $(this).children().eq(0).prepend('<div class="remove">x</div>');
+            });
+            return selector
+        }
+
+        function remove() {
+            $('.remove').click(function() {
+                var row = $(this).parent().parent();
+                $.post("/remove-rows",
+                       { data: JSON.stringify($(this).parent().text()) },
+                       function() { row.remove(); }
+                );
+            });
+        }
+
+        $(document).ready(function() {
+            // make some columns editable
+            var descr_col = $("th:contains('description')").index();
+            $("thead tr").children().eq(descr_col).attr("class", "description");
+            var time_col = $("th:contains('timestamp')").index();
+            $("thead tr").children().eq(time_col).attr("class", "timestamp");
+            format_rows($("tbody tr"));
+            remove();
+
+            // setInterval(update_values, 5000);
+
+            // function update_values() {
+            // $.get("/send-rows", function(data) {
+            //     var rows = format_rows($(data.rows).filter('tr'));
+            //     $('table tbody').prepend(rows);
+            // });
+            // }
+
+
+        });
+
+        // var source = new EventSource('/send-rows');
+        // source.onmessage = function(event) {
+        //     // alert('jonas');
+        //     if (event.data.length > 0) {
+        //         // console.log(event.data);
+        //         var rows = format_rows($(event.data).filter('tr'));
+        //         // console.log(rows);
+        //         $('table tbody').prepend(rows);
+        //         remove();
+        //     }
+        // };
+    </script>
+</body>
+</html>
