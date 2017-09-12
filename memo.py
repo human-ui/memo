@@ -76,6 +76,7 @@ def store():
     # db.to_csv('/braintree/home/qbilius/dropbox/memo/index.csv', encoding='utf-8')
     # sys.exit()
     dest = os.path.join(DATA_DIR, '{:04d}_{}'.format(len(db), timestamp))
+    print(os.path.basename(dest))
     if not os.path.isdir(dest):
         os.makedirs(dest)
         os.environ['MEMO_DIR'] = dest + os.path.sep
