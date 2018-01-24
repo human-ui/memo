@@ -5,8 +5,10 @@ table {
 tr {
     border-bottom: 1px solid #eee;
 }
-th {
+th, td {
     text-align: left;
+    max-width: 300px;
+    word-wrap: break-word;
 }
 table .description {
     width: 40%;

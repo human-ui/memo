@@ -5,8 +5,8 @@ from collections import OrderedDict
 import numpy as np
 import pandas
 import seaborn as sns
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
+# from watchdog.observers import Observer
+# from watchdog.events import FileSystemEventHandler
 
 ROOT = '/braintree/home/qbilius/dropbox/memo'
 SCRATCH = '/braintree/home/qbilius/computed'
@@ -69,9 +69,11 @@ def store():
     parser.add_argument('executable')
     parser.add_argument('script')
     parser.add_argument('-t', '--tag', default='')
+    parser.add_argument('-d', '--description', default='')
     args, other = parser.parse_known_args()
 
-    filepath = os.path.abspath(args.script)
+    call_args = [args.executable, args.script] + other
+
     db = pandas.read_csv(DBPATH, index_col=0, na_values='NaN', keep_default_na=False)
     # db.to_csv('/braintree/home/qbilius/dropbox/memo/index.csv', encoding='utf-8')
     # sys.exit()
@@ -82,28 +84,29 @@ def store():
         os.environ['MEMO_DIR'] = dest + os.path.sep
     else:
         raise ValueError('{} already exists'.format(dest))
-    shutil.copy2(filepath, dest)
+    shutil.copy2(os.path.abspath(args.script), dest)
 
     # df = pandas.DataFrame()
     # df.to_pickle(os.path.join(DATA_DIR, 'index.pkl'))
 
     rec = OrderedDict([('timestamp', timestamp),
-                    ('command', ' '.join(sys.argv[1:])),
+                    ('command', ' '.join(call_args)),
                     ('working dir', os.path.abspath(os.getcwd())),
                     ('duration', np.nan),
                     ('tag', args.tag),
-                    ('description', ''),
+                    ('description', args.description),
                     ('show', True)
                     ])
     db = db.append(rec, ignore_index=True)
     idx = db.index[-1]
+
     db.to_csv(DBPATH, encoding='utf-8')
 
     # db = pandas.read_csv(DBPATH, index_col=0, na_values='')
     # requests.post('http://localhost:5000/wait-for-changes',
     #               data={'data': db.loc[db.index[-1:]].drop('show', 1).to_html()})
 
-    p = subprocess.Popen(sys.argv[1:])
+    p = subprocess.Popen(call_args)
     try:
         p.wait()
     except KeyboardInterrupt:
