@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import sys, os, time, shutil, argparse, subprocess, datetime, contextlib, pickle, inspect
+import sys, os, time, shutil, argparse, subprocess, datetime, contextlib, pickle, inspect, socket
 from collections import OrderedDict
 # import requests
 import numpy as np
@@ -61,42 +61,64 @@ class PandasColl(object):
 #     db.to_csv(DBPATH, encoding='utf-8')
 
 
-def store():
+def setup_dest():
+    db = pandas.read_csv(DBPATH, index_col=0, na_values='NaN', keep_default_na=False)
+    os.environ['MEMO_IDX'] = f"{len(db):04d}"
+
+    dest = os.path.join(DATA_DIR, os.environ['MEMO_IDX'])
+    if not os.path.isdir(dest):
+        os.makedirs(dest)
+        os.environ['MEMO_DIR'] = dest + os.path.sep
+    else:
+        raise ValueError('{} already exists'.format(dest))
+    print(f'memo id: {os.path.basename(dest)}, version: {version}')
+    return dest
+
+
+def store(args=None, dest=None):
     start = time.time()
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+
+    if args is None:
+        args = sys.argv[1:]
 
     parser = argparse.ArgumentParser()
     parser.add_argument('executable')
     parser.add_argument('script')
     parser.add_argument('-t', '--tag', default='')
     parser.add_argument('-d', '--description', default='')
-    args, other = parser.parse_known_args()
+    args, other = parser.parse_known_args(args)
 
     call_args = [args.executable, args.script] + other
+    command = ' '.join(call_args)
 
     db = pandas.read_csv(DBPATH, index_col=0, na_values='NaN', keep_default_na=False)
+
+    if command in db.command.values:
+        version = db[db.command == command].version.max() + 1
+    else:
+        version = 1
+
+    os.environ['MEMO_CMD_VERSION'] = str(version)
     # db.to_csv('/braintree/home/qbilius/dropbox/memo/index.csv', encoding='utf-8')
     # sys.exit()
-    dest = os.path.join(DATA_DIR, '{:04d}_{}'.format(len(db), timestamp))
-    print(os.path.basename(dest))
-    if not os.path.isdir(dest):
-        os.makedirs(dest)
-        os.environ['MEMO_DIR'] = dest + os.path.sep
-    else:
-        raise ValueError('{} already exists'.format(dest))
+    # dest = os.path.join(DATA_DIR, '{:04d}_{}'.format(len(db), timestamp))
+
+    if dest is not None:
+        dest = setup_dest()
     shutil.copy2(os.path.abspath(args.script), dest)
 
-    # df = pandas.DataFrame()
-    # df.to_pickle(os.path.join(DATA_DIR, 'index.pkl'))
-
     rec = OrderedDict([('timestamp', timestamp),
-                    ('command', ' '.join(call_args)),
-                    ('working dir', os.path.abspath(os.getcwd())),
-                    ('duration', np.nan),
-                    ('tag', args.tag),
-                    ('description', args.description),
-                    ('show', True)
-                    ])
+                       ('command', command),
+                       ('host', socket.gethostname()),
+                       ('working dir', os.path.abspath(os.getcwd())),
+                       ('duration', np.nan),
+                       ('version', version),
+                       ('tag', args.tag),
+                       ('description', args.description),
+                       ('outcome', ''),
+                       ('show', True)
+                       ])
     db = db.append(rec, ignore_index=True)
     idx = db.index[-1]
 
