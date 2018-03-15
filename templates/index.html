@@ -63,9 +63,11 @@
         function format_rows(selector) {
             var tag_col = $("th:contains('tag')").index();
             var descr_col = $("th:contains('description')").index();
+            var outcome_col = $("th:contains('outcome')").index();
             selector.each(function() {
                 $(this).children().eq(tag_col).attr("contenteditable", true);
                 $(this).children().eq(descr_col).attr("contenteditable", true);
+                $(this).children().eq(outcome_col).attr("contenteditable", true);
                 $(this).children().eq(0).attr("class", "index");
                 $(this).children().eq(0).prepend('<div class="remove">x</div>');
             });
@@ -84,13 +86,19 @@
 
         $('td').on('click', function(event) {
             var editable = $(this).closest('td')[0].getAttribute('contenteditable');
-            if (editable != "true") {
+            if ((editable != "true") && event.shiftKey) {
                 var dropbox = "https://www.dropbox.com/work/memo/store/";
                 var time_col = $("th:contains('timestamp')").index();
                 var timestamp = $(this).parent().children().eq(time_col).text();
                 var idx = $(this).parent().children().eq(0).text();
-                idx = ("0000" + Number(idx.slice(1))).slice(-4);
-                window.open(dropbox + idx + '_' + timestamp, "_self")
+                idx = Number(idx.slice(1))
+                idx = ("0000" + idx).slice(-4);
+                if (idx <= 880) {
+                    window.open(dropbox + idx + '_' + timestamp);//, "_self");
+                } else {
+                    window.open(dropbox + idx);//, "_self");
+                }
+
             }
         });
 
