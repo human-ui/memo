@@ -8,8 +8,24 @@
         integrity="sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4="
         crossorigin="anonymous">
     </script>
+    {{ resources|safe }}
+    <!-- <link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-0.12.15.min.css" type="text/css" />
+    <link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-widgets-0.12.15.min.css" type="text/css" />
+    <link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-tables-0.12.15.min.css" type="text/css">
+
+    <script type="text/javascript" src="https://cdn.pydata.org/bokeh/release/bokeh-0.12.15.min.js"></script>
+    <script type="text/javascript" src="https://cdn.pydata.org/bokeh/release/bokeh-api-0.12.15.min.js"></script>
+    <script type="text/javascript" src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-0.12.15.min.js"></script>
+    <script type="text/javascript" src="https://cdn.pydata.org/bokeh/release/bokeh-tables-0.12.15.min.js"></script> -->
 </head>
 <body>
+    <div id="popupc">
+        <div class="popup">
+            <span id="popclose">&times;</span>
+            <div id="popcontent"></div>
+        </div>
+    </div>
+
     <h1>Experiments</h1>
 
     <input type="search" class="search" placeholder="Filter" tabindex="1">
@@ -18,6 +34,7 @@
 
     <script>
         var isDirty = false;
+        var curIdx = 0;
 
          // warn about unsaved changes
         $(window).on('beforeunload', function(){
@@ -86,21 +103,50 @@
 
         $('td').on('click', function(event) {
             var editable = $(this).closest('td')[0].getAttribute('contenteditable');
-            if ((editable != "true") && event.shiftKey) {
-                var dropbox = "https://www.dropbox.com/work/memo/store/";
-                var time_col = $("th:contains('timestamp')").index();
-                var timestamp = $(this).parent().children().eq(time_col).text();
-                var idx = $(this).parent().children().eq(0).text();
-                idx = Number(idx.slice(1))
-                idx = ("0000" + idx).slice(-4);
-                if (idx <= 880) {
-                    window.open(dropbox + idx + '_' + timestamp);//, "_self");
-                } else {
-                    window.open(dropbox + idx);//, "_self");
-                }
-
+            // if ((editable != "true") && event.shiftKey) {
+            //     var dropbox = "https://www.dropbox.com/work/memo/store/";
+            //     var time_col = $("th:contains('timestamp')").index();
+            //     var timestamp = $(this).parent().children().eq(time_col).text();
+            //     var idx = $(this).parent().children().eq(0).text();
+            //     idx = Number(idx.slice(1))
+            //     idx = ("0000" + idx).slice(-4);
+            //     if (idx <= 880) {
+            //         window.open(dropbox + idx + '_' + timestamp);//, "_self");
+            //     } else {
+            //         window.open(dropbox + idx);//, "_self");
+            //     }
+            // }
+            if (editable != "true") {
+                curIdx = $(this).parent().find('th').text();
+                $('#popcontent').html('');
+                $.post("/popup",
+                       { data: JSON.stringify(curIdx) },
+                       function( data ) {
+                           $('#popcontent').html(data);
+                       }
+                );
+                $('#popupc').css("display", "block");
             }
         });
+
+        $('#popclose').on('click', function(event) {
+            $('#popupc').css("display", "none");
+        });
+
+        $('#popupc').on('click', function(event) {
+            $('#popupc').css("display", "none");
+        });
+
+        setInterval(function() {
+            if ($('#popupc').css('display') != "none") {
+                $.post("/popup",
+                        { data: JSON.stringify(curIdx) },
+                        function( data ) {
+                            $('#popcontent').html(data);
+                        }
+                    );
+            }
+        }, 60*1000);
 
         $(document).ready(function() {
             // make some columns editable
