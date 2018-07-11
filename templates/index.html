@@ -3,26 +3,24 @@
 <head>
     <link rel="stylesheet" href="https://unpkg.com/wingcss"/>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet"
+      href="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/styles/tomorrow-night-bright.min.css">
+    <script src="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/highlight.min.js"></script>
     <script
         src="https://code.jquery.com/jquery-3.2.1.min.js"
         integrity="sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4="
         crossorigin="anonymous">
     </script>
     {{ resources|safe }}
-    <!-- <link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-0.12.15.min.css" type="text/css" />
-    <link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-widgets-0.12.15.min.css" type="text/css" />
-    <link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-tables-0.12.15.min.css" type="text/css">
-
-    <script type="text/javascript" src="https://cdn.pydata.org/bokeh/release/bokeh-0.12.15.min.js"></script>
-    <script type="text/javascript" src="https://cdn.pydata.org/bokeh/release/bokeh-api-0.12.15.min.js"></script>
-    <script type="text/javascript" src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-0.12.15.min.js"></script>
-    <script type="text/javascript" src="https://cdn.pydata.org/bokeh/release/bokeh-tables-0.12.15.min.js"></script> -->
 </head>
 <body>
-    <div id="popupc">
-        <div class="popup">
-            <span id="popclose">&times;</span>
+    <div id="popup-container">
+        <div class="popup-content">
+            <ul id="poplist"></ul>
             <div id="popcontent"></div>
+            <div>
+                <span id="popclose">&times;</span>
+            </div>
         </div>
     </div>
 
@@ -35,6 +33,7 @@
     <script>
         var isDirty = false;
         var curIdx = 0;
+        var curFile = '';
 
          // warn about unsaved changes
         $(window).on('beforeunload', function(){
@@ -118,32 +117,53 @@
             // }
             if (editable != "true") {
                 curIdx = $(this).parent().find('th').text();
-                $('#popcontent').html('');
+                curIdx = curIdx.slice(1,curIdx.length);  // remove 'x'
+                curFile = 'results.pkl';
+                $('#poplist').empty();
+                $('#popcontent').empty(); // html('');
+                $('#popup-container').css("display", "block");
+
                 $.post("/popup",
                        { data: JSON.stringify(curIdx) },
-                       function( data ) {
-                           $('#popcontent').html(data);
-                       }
-                );
-                $('#popupc').css("display", "block");
+                       popup
+                       );
             }
         });
 
+        function popup(data) {
+            $('#poplist').empty();
+            // $('#popcontent').empty(); // html('');
+            $.each(data, function() {
+                $('#poplist').append('<li><a class="files">' + this + "</a></li>");
+            })
+            $("a:contains('" + curFile + "')").trigger('click');
+        }
+
         $('#popclose').on('click', function(event) {
-            $('#popupc').css("display", "none");
+            $('#popup-container').css("display", "none");
         });
 
-        $('#popupc').on('click', function(event) {
-            $('#popupc').css("display", "none");
+        // $('#popup-container').on('click', function(event) {
+        //     $('#popup-container').css("display", "none");
+        // });
+
+        $('#poplist').on('click', '.files', function(event) {
+            // curIdx = $(this).parent().find('th').text();
+            curFile = $(this).text();
+            $.post("/click-file",
+                { data: JSON.stringify([curIdx, $(this).text()]) },
+                function(data) {
+                    $('#popcontent').html(data);
+                    hljs.highlightBlock($('code')[0]);
+                    }
+            );
         });
 
         setInterval(function() {
-            if ($('#popupc').css('display') != "none") {
+            if ($('#popup-container').css('display') != "none") {
                 $.post("/popup",
                         { data: JSON.stringify(curIdx) },
-                        function( data ) {
-                            $('#popcontent').html(data);
-                        }
+                        popup
                     );
             }
         }, 60*1000);
