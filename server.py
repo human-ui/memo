@@ -1,4 +1,4 @@
-import json
+import json, pprint, pickle, base64
 
 import pandas
 
@@ -22,7 +22,8 @@ from bokeh.models.widgets import Select, Button
 import bokeh.resources
 
 
-MEMO_PATH = '/braintree/data2/active/users/qbilius/memo/'
+MEMO_PATH = os.environ['MEMO']
+# '/braintree/data2/active/users/qbilius/memo/'
 
 
 app = Flask(__name__)
@@ -74,10 +75,12 @@ class Plot(object):
             # for key, value in rec.items():
             #     if not isinstance(value, (dict, list)) and key != '_id':
             #         common.append((key, value))
+            # import ipdb; ipdb.set_trace()
             for key, value in rec.items():
                 if key != 'meta':
                     if isinstance(value, dict):
                         for k, v in value.items():
+                            if k == 'meta': import ipdb; ipdb.set_trace()
                             if isinstance(v, dict):
                                 for ki, vi in v.items():
                                     df.append(dict(common + [('hue', ki), ('col', k), ('value', vi)]))
@@ -109,15 +112,19 @@ class Plot(object):
 
     def get_agg(self):
         df = self.get_data()
+        if 'step' in df.columns:
+            self.xaxis = 'step'
+        else:
+            self.xaxis = 'epoch'
 
         if len(df) > 0:
             sel = df.value.apply(lambda x: isinstance(x, bytes))
             sdf = df[~sel]
             sdf.value = sdf.value.astype(float)
             if 'group' in df:
-                agg = sdf.groupby(['col', 'hue', 'group', 'step']).value.mean()
+                agg = sdf.groupby(['col', 'hue', 'group', self.xaxis]).value.mean()
             else:
-                agg = sdf.groupby(['col', 'hue', 'step']).value.mean()
+                agg = sdf.groupby(['col', 'hue', self.xaxis]).value.mean()
             # ims = df[sel & (df[sel].step == df[sel].step.max())].value.values
             ims = None
         else:
@@ -143,14 +150,17 @@ class Plot(object):
         for col in agg.index.levels[0]:
             sources[col] = {}
 
-            hover = HoverTool(tooltips=[('step', '@step'), (col, '@{{{}}}'.format(col))])
+            hover = HoverTool(tooltips=[(self.xaxis, f'@{self.xaxis}'), (col, '@{{{}}}'.format(col))])
             p = figure(plot_height=300, plot_width=400, title=col,
                        tools=['save', 'ywheel_zoom', 'pan', 'reset'],
                        toolbar_location='above', min_border_left=80)
             p.add_tools(hover)
-            p.xaxis.axis_label = 'step'
+            p.xaxis.axis_label = self.xaxis
             p.yaxis.axis_label = col
-            p.xaxis[0].formatter = PrintfTickFormatter(format='%d')
+            if self.xaxis == 'step':
+                p.xaxis[0].formatter = PrintfTickFormatter(format='%d')
+            else:
+                p.xaxis[0].formatter = PrintfTickFormatter(format='%.3f')
 
             uq_hue = agg.loc[col].reset_index().hue.unique()
             threshold = 10  #2 if self.widgetbox['port'].value == '27017' else 10
@@ -171,8 +181,8 @@ class Plot(object):
 
             else:
                 for i, hue in enumerate(uq_hue):
-                    sources[col][hue] = ColumnDataSource({'step': [], col:[]})
-                    p.line(x='step', y=col, color=Category10[10][i], legend=str(hue),
+                    sources[col][hue] = ColumnDataSource({self.xaxis: [], col:[]})
+                    p.line(x=self.xaxis, y=col, color=Category10[10][i], legend=str(hue),
                         source=sources[col][hue])
                 p.legend.location = 'bottom_left'
                 p.legend.background_fill_alpha = 0
@@ -237,12 +247,12 @@ class Plot(object):
                     for hue in self.sources[col]:
                         try:
                             if 'group' in agg.loc[(col, hue)].index.names:
-                                new_data = {'step': agg.loc[(col, hue, 0)].index,
+                                new_data = {self.xaxis: agg.loc[(col, hue, 0)].index,
                                             col: agg.loc[(col, hue, 0)]}
                                 # import ipdb; ipdb.set_trace()
                                 self.sources[col][hue].stream(new_data)
                             else:
-                                new_data = {'step': agg.loc[(col, hue)].index,
+                                new_data = {self.xaxis: agg.loc[(col, hue)].index,
                                             col: agg.loc[(col, hue)]}
                                 # import ipdb; ipdb.set_trace()
                                 self.sources[col][hue].stream(new_data)
@@ -274,11 +284,31 @@ class Plot(object):
 
 @app.route('/', methods=['GET'])
 def index():
-    df = pandas.read_csv('index.csv', index_col=0, na_values='NaN', keep_default_na=False)
-    df = df[df.show].drop('show', 1)
+    df = []
+    for folder in sorted(os.listdir(os.environ['MEMO'])):
+        meta_path = os.environ['MEMO'] + f'{folder}/meta.json'
+        if os.path.isfile(meta_path):
+            # data = pandas.read_json(meta_path)
+            data = json.load(open(meta_path))
+            data['args'] = ' '.join(data['args'])
+            data['script'] = data.get('script', '')
+            data['id'] = folder
+            df.append(data)
+    df = pandas.DataFrame(df)
     df = df[::-1]
     df = df[:50]
-    table = df.to_html()
+    if len(df) < 50:
+        df_old = pandas.read_csv('index.csv', index_col=0, na_values='NaN', keep_default_na=False)
+        df_old = df_old[df_old.show].drop('show', 1)
+        df_old = df_old.rename(columns={'command': 'args'})
+        df_old = df_old[::-1]
+        df_old = df_old[:50 - len(df)]
+        df_old['id'] = df_old.index
+        df = pandas.concat([df, df_old], ignore_index=True)
+
+    df = df.set_index('id')
+    df = df[['script', 'args', 'tag', 'description']]
+    table = df.to_html(index_names=False)
     table = format_table(table)
     return render_template('index.html', table=table, resources=bokeh.resources.CDN.render())
 
@@ -337,10 +367,12 @@ def remove_rows():
 
 @app.route('/popup', methods=['POST'])
 def popup():
-    row = json.loads(request.form['data'])
-    pp = Plot(row[1:])
-    script, div = components(pp.plots)
-    return script + ''.join(div.values())
+    id_ = json.loads(request.form['data'])
+    fnames = sorted(os.listdir(os.path.join(MEMO_PATH, id_)))
+    # data = render_file(id_, 'results.pkl')
+    # res = [fnames, data]
+
+    return jsonify(fnames)
     # script = server_document('http://localhost:5006/plot2')
     # return render_template('index.html', script=script, div=''.join(div.values()))
 
@@ -353,6 +385,44 @@ def popup():
 
     #     # use the script in the rendered page
     #     return render_template("embed.html", script=script, template="Flask")
+
+
+@app.route('/click-file', methods=['POST'])
+def click_file():
+    id_, filename = json.loads(request.form['data'])
+    data = render_file(id_, filename)
+    return jsonify(data)
+
+
+def render_file(id_, filename):
+    ext = os.path.splitext(filename)[-1][1:]
+    path = os.path.join(MEMO_PATH, id_, filename)
+    if filename == 'results.pkl':
+        pp = Plot(id_)
+        script, div = components(pp.plots)
+        data = script + ''.join(div.values())
+    elif ext.lower() in ['png', 'jpg', 'jpeg', 'tif', 'tiff', 'bmp']:
+        with open(path, 'rb') as f:
+            data = base64.b64encode(f.read()).decode('ascii')
+        data = f'<img src="data:image/{ext};base64,{data}"/>'
+    else:
+        if ext == 'json':
+            data = json.load(open(path))
+            data = pprint.pformat(data)
+        else:
+            with open(path) as f:
+                data = f.readlines()
+            data = ''.join(data)
+
+        data = f"""
+        <figure>
+            <figcaption>{filename}</figcaption>
+            <pre>
+                <code class="{ext}">{data}</code>
+            </pre>
+        </figure>
+        """
+    return data
 
 
 if __name__ == '__main__':
