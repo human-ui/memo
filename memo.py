@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import sys, os, shutil, argparse, subprocess, socket, datetime, json
+import sys, os, shutil, argparse, subprocess, socket, datetime, json, time
 
 DATA_DIR = '/braintree/data2/active/users/qbilius/memo'
 
@@ -18,11 +18,13 @@ def main(args=None):
     parser.add_argument('-d', '--description', default='')
     parser.add_argument('--slurm', action='store_true', default=False)
     parser.add_argument('--switch_dir', action='store_true', default=True)
+    parser.add_argument('--follow', action='store_true', default=False)
+    parser.add_argument('--singularity', action='store_true', default=False)
     args, script_args = parser.parse_known_args(args)
 
     if args.slurm:
         parser = argparse.ArgumentParser()
-        parser.add_argument('-t', '--time', default='2-00:00:00')
+        parser.add_argument('-t', '--time', default='4-00:00:00')
         parser.add_argument('-n', '--ntasks', default=1, type=int)
         parser.add_argument('-c', '--cpus_per_task', default=5, type=int)
         parser.add_argument('--gres', default='gpu:GEFORCEGTX1080TI:1')  # titan-x, GEFORCEGTX1080TI
@@ -53,9 +55,14 @@ def main(args=None):
 
     command = ' '.join(script_args)
     if args.slurm and os.path.basename(args.executable) == 'python':
-        command = f'{sys.executable} {args.script} {command}'
+        command = f"{sys.executable} {args.script} {command}"
     else:
         command = f'{args.executable} {args.script} {command}'
+
+    if args.switch_dir:
+        dest = os.environ['MEMO_DIR']
+    else:
+        dest = os.getcwd()
 
     if args.slurm:
         with open(os.environ['MEMO_DIR'] + 'run.sh', 'w') as f:
@@ -77,26 +84,30 @@ def main(args=None):
 
             f.write('\n')
             f.write(f"export MEMO_DIR={os.environ['MEMO_DIR']}\n")
-            if args.executable == 'python':
+            if args.singularity:
                 f.write(f'singularity exec --bind /braintree:/braintree '
                         f'--bind /home:/home --bind /om:/om --nv '
                         f'docker://nvidia/cuda:9.0-cudnn7-runtime-centos7 '
-                        f'"{command}"\n')
+                        f'{command}\n')
             else:
-                f.write(f'"{command}"\n')
+                f.write(f'{command}\n')
 
             f.write('memo append_timestamp\n')
 
-        call_args = ['ssh', 'openmind7.mit.edu', 'sbatch', os.environ['MEMO_DIR'] + 'run.sh']
+        bash_cmd = f"cd {os.environ['MEMO_DIR']}; sbatch run.sh"
+        call_args = ['ssh', 'openmind7.mit.edu', 'bash', '--login', '-c', f'"{bash_cmd}"']
 
     else:
         with open(os.environ['MEMO_DIR'] + 'run.sh', 'w') as f:
+            # f.write(f'cd {dest}\n')
             f.write(f'{command}\n')
             f.write('memo append_timestamp\n')
 
         call_args = ['sh', os.environ['MEMO_DIR'] + 'run.sh']
 
     rec = {'start_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'executable': args.executable,
+            'script': args.script,
             'args': script_args,
             'host': socket.gethostname(),
             'working dir': os.path.abspath(os.getcwd()),
@@ -111,10 +122,25 @@ def main(args=None):
 
     # requests.post('http://localhost:5000/wait-for-changes',
     #               data={'data': db.loc[db.index[-1:]].drop('show', 1).to_html()})
-    subprocess.Popen(['nohup'] + call_args,
-                     stdin=open('/dev/null', 'w'),
-                     stdout=open(os.environ['MEMO_DIR'] + 'log.out', 'a'),
-                     stderr=open(os.environ['MEMO_DIR'] + 'log.out', 'a'))
+    if args.slurm:
+        out = subprocess.run(call_args, check=True,
+                            stderr=open('/dev/null', 'w'),
+                            stdout=subprocess.PIPE).stdout
+        print(out.decode('ascii').rstrip('\n'))
+    else:
+        if not args.follow:
+            subprocess.Popen(['nohup'] + call_args, cwd=dest,
+                            stdin=open('/dev/null', 'w'),
+                            stdout=open(os.environ['MEMO_DIR'] + 'log.out', 'a'),
+                            stderr=open(os.environ['MEMO_DIR'] + 'log.out', 'a'))
+            time.sleep(1)
+            subprocess.Popen(['cat', os.environ['MEMO_DIR'] + 'log.out'])
+        else:
+            p = subprocess.Popen(call_args, cwd=dest)
+            try:
+                p.wait()
+            except KeyboardInterrupt:
+                p.terminate()
 
 
 if __name__ == '__main__':
