@@ -1,18 +1,13 @@
-import json, pprint, pickle, base64
-
-import pandas
-
-# from bokeh.client import pull_session
-# from bokeh.embed import server_session
-from bokeh.embed import server_document, components
-
-from flask import Flask, request, jsonify, render_template
-
-import os, datetime
+import os, datetime, json, pprint, pickle, base64, subprocess
 
 import numpy as np
 import pandas
 
+from flask import Flask, request, jsonify, render_template
+
+# from bokeh.client import pull_session
+# from bokeh.embed import server_session
+from bokeh.embed import server_document, components
 from bokeh.layouts import gridplot, widgetbox, row, column
 from bokeh.plotting import figure, curdoc
 from bokeh.models import ColumnDataSource, ColorBar, PrintfTickFormatter, HoverTool, Range1d, LinearColorMapper, FuncTickFormatter
@@ -357,12 +352,21 @@ def confirm_edit():
 
 @app.route('/remove-rows', methods=['POST'])
 def remove_rows():
-    index = json.loads(request.form['data'])
-    index = int(index[1:])  # first character is x
-    df = pandas.read_csv('index.csv', index_col=0, na_values='NaN', keep_default_na=False)
-    df.loc[index, 'show'] = False
-    df.to_csv('index.csv', encoding='utf-8')
-    return 'ok'
+    id_ = json.loads(request.form['data'])
+    try:
+        # import ipdb; ipdb.set_trace()
+        os.rename(os.path.join(MEMO_PATH, id_),
+                  os.path.abspath(os.path.join(MEMO_PATH, '..', 'memo-trash', id_)))
+        # subprocess.run(['trash-put', os.path.join(MEMO_PATH, id_)], check=True)
+    except:
+        return 'Could not remove this entry.'
+    else:
+        return 'ok'
+    # index = int(index[1:])  # first character is x
+    # df = pandas.read_csv('index.csv', index_col=0, na_values='NaN', keep_default_na=False)
+    # df.loc[index, 'show'] = False
+    # df.to_csv('index.csv', encoding='utf-8')
+    # return 'ok'
 
 
 @app.route('/popup', methods=['POST'])

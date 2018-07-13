@@ -14,6 +14,8 @@
     {{ resources|safe }}
 </head>
 <body>
+    <div id="notification"></div>
+
     <div id="popup-container">
         <div class="popup-content">
             <ul id="poplist"></ul>
@@ -86,7 +88,7 @@
                 $(this).children().eq(outcome_col).attr("contenteditable", true);
                 $(this).children().eq(0).attr("class", "index");
                 $(this).children().eq(0).html('<div class="remove">x</div>' +
-                                              '<div>' + $(this).children().eq(0).text() + '</div>');
+                                              '<span>' + $(this).children().eq(0).text() + '</span>');
             });
             return selector
         }
@@ -94,9 +96,27 @@
         function remove() {
             $('.remove').click(function() {
                 var row = $(this).parent().parent();
+                var idx = $(this).parent().find('span').text();
                 $.post("/remove-rows",
-                       { data: JSON.stringify($(this).parent().text()) },
-                       function() { row.remove(); }
+                       { data: JSON.stringify(idx) },
+                       function(data) {
+                           console.log(data);
+                           if (data == 'ok') {
+                               row.remove();
+                               $('#notification').attr("class", "success");
+                               $('#notification').text(idx + ' removed successfully')
+                                    .fadeIn()
+                                    .delay(2000)
+                                    .fadeOut();
+                           }
+                           else {
+                               $('#notification').attr("class", "error");
+                               $('#notification').text('Could not remove ' + idx)
+                                    .fadeIn()
+                                    .delay(2000)
+                                    .fadeOut();
+                               }
+                           }
                 );
             });
         }
@@ -117,9 +137,9 @@
             //     }
             // }
             if (editable != "true") {
-                curIdx = $(this).parent().find('th').text();
-                curIdx = curIdx.slice(1,curIdx.length);  // remove 'x'
+                curIdx = $(this).parent().find('th').find('span').text();
                 curFile = 'results.pkl';
+                $(this).parent().attr('class', 'selected-row');
                 $('#poplist').empty();
                 $('#popcontent').empty(); // html('');
                 $('#popup-container').css("display", "block");
@@ -133,6 +153,7 @@
 
         function popup(data) {
             $('#poplist').empty();
+            $('#poplist').text(curIdx);
             // $('#popcontent').empty(); // html('');
             $.each(data, function() {
                 $('#poplist').append('<li><a class="files">' + this + "</a></li>");
@@ -142,6 +163,10 @@
 
         $('#popclose').on('click', function(event) {
             $('#popup-container').css("display", "none");
+            setTimeout(function() {
+                $('.selected-row').attr('class', '');
+            }, 5000);
+
         });
 
         // $('#popup-container').on('click', function(event) {
