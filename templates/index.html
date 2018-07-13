@@ -85,7 +85,8 @@
                 $(this).children().eq(descr_col).attr("contenteditable", true);
                 $(this).children().eq(outcome_col).attr("contenteditable", true);
                 $(this).children().eq(0).attr("class", "index");
-                $(this).children().eq(0).prepend('<div class="remove">x</div>');
+                $(this).children().eq(0).html('<div class="remove">x</div>' +
+                                              '<div>' + $(this).children().eq(0).text() + '</div>');
             });
             return selector
         }
