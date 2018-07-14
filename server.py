@@ -3,6 +3,7 @@ import os, datetime, json, pprint, pickle, base64, subprocess
 import numpy as np
 import pandas
 
+import flask
 from flask import Flask, request, jsonify, render_template
 
 # from bokeh.client import pull_session
@@ -422,7 +423,7 @@ def render_file(id_, filename):
         <figure>
             <figcaption>{filename}</figcaption>
             <pre>
-                <code class="{ext}">{data}</code>
+                <code class="{ext}">{flask.escape(data)}</code>
             </pre>
         </figure>
         """
