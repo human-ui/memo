@@ -36,6 +36,7 @@
         var isDirty = false;
         var curIdx = 0;
         var curFile = '';
+        var selectionTimeout = null;
 
          // warn about unsaved changes
         $(window).on('beforeunload', function(){
@@ -54,7 +55,7 @@
             if ($(this).text() != cellValue) {
                 isDirty = true;
                 // var rowIndex = $(this).parent().index();
-                var rowName = $(this).parent().find('th').text(); // children().first().text();
+                var rowName = $(this).parent().find('th').find('span').text();
                 var col = $(this).parent().children().index($(this));
                 var colName = $(this).closest("table").find("th").eq(col).text();
                 $.post("/",
@@ -139,6 +140,8 @@
             if (editable != "true") {
                 curIdx = $(this).parent().find('th').find('span').text();
                 curFile = 'results.pkl';
+                $('.selected-row').attr('class', '');
+                clearTimeout(selectionTimeout);
                 $(this).parent().attr('class', 'selected-row');
                 $('#poplist').empty();
                 $('#popcontent').empty(); // html('');
@@ -163,7 +166,7 @@
 
         $('#popclose').on('click', function(event) {
             $('#popup-container').css("display", "none");
-            setTimeout(function() {
+            selectionTimeout = setTimeout(function() {
                 $('.selected-row').attr('class', '');
             }, 5000);
 
@@ -194,12 +197,20 @@
             }
         }, 60*1000);
 
+        $(document).keyup(function(e) {
+            if (e.keyCode == 27) {
+                $('#popclose').trigger('click');
+            }
+        });
+
         $(document).ready(function() {
             // make some columns editable
             var descr_col = $("th:contains('description')").index();
             $("thead tr").children().eq(descr_col).attr("class", "description");
-            var time_col = $("th:contains('timestamp')").index();
-            $("thead tr").children().eq(time_col).attr("class", "timestamp");
+            // var time_col = $("th:contains('timestamp')").index();
+            // $("thead tr").children().eq(time_col).attr("class", "timestamp")
+            var outcome_col = $("th:contains('outcome')").index();
+            $("thead tr").children().eq(outcome_col).attr("class", "outcome");;
             format_rows($("tbody tr"));
             remove();
 

@@ -10,12 +10,12 @@ th, td {
     max-width: 300px;
     word-wrap: break-word;
 }
-table .description {
+table .outcome {
     width: 40%;
 }
-table .timestamp {
+/* table .timestamp {
     min-width: 200px;
-}
+} */
 .remove {
     position:absolute;
     display: none;
@@ -94,7 +94,7 @@ ul#poplist {
 
 #popclose {
     /* float: right; */
-    font-size: 30px;
+    font-size: 50pt;
     font-weight: bold;
     text-decoration: none;
     color: #333;

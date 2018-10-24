@@ -76,7 +76,8 @@ class Plot(object):
                 if key != 'meta':
                     if isinstance(value, dict):
                         for k, v in value.items():
-                            if k == 'meta': import ipdb; ipdb.set_trace()
+                            # import ipdb; ipdb.set_trace()
+                            # if k == 'meta': import ipdb; ipdb.set_trace()
                             if isinstance(v, dict):
                                 for ki, vi in v.items():
                                     df.append(dict(common + [('hue', ki), ('col', k), ('value', vi)]))
@@ -280,6 +281,7 @@ class Plot(object):
 
 @app.route('/', methods=['GET'])
 def index():
+    nrecs = 1000
     df = []
     for folder in sorted(os.listdir(os.environ['MEMO'])):
         meta_path = os.environ['MEMO'] + f'{folder}/meta.json'
@@ -292,18 +294,18 @@ def index():
             df.append(data)
     df = pandas.DataFrame(df)
     df = df[::-1]
-    df = df[:50]
-    if len(df) < 50:
+    df = df[:nrecs]
+    if len(df) < nrecs:
         df_old = pandas.read_csv('index.csv', index_col=0, na_values='NaN', keep_default_na=False)
         df_old = df_old[df_old.show].drop('show', 1)
         df_old = df_old.rename(columns={'command': 'args'})
         df_old = df_old[::-1]
-        df_old = df_old[:50 - len(df)]
+        df_old = df_old[:nrecs - len(df)]
         df_old['id'] = df_old.index
         df = pandas.concat([df, df_old], ignore_index=True)
 
     df = df.set_index('id')
-    df = df[['script', 'args', 'tag', 'description']]
+    df = df[['script', 'slurm', 'args', 'tag', 'description', 'outcome']]
     table = df.to_html(index_names=False)
     table = format_table(table)
     return render_template('index.html', table=table, resources=bokeh.resources.CDN.render())
@@ -342,12 +344,17 @@ def format_table(table, return_rows=False):
 
 @app.route('/', methods=['POST'])
 def confirm_edit():
-    row, col, value = json.loads(request.form['data'])
+    id_, col, value = json.loads(request.form['data'])
+    path = os.path.join(MEMO_PATH, id_, 'meta.json')
+    data = json.load(open(path))
+    data[col] = value
+    with open(path, 'w') as f:
+        json.dump(data, f)
     # time.sleep(10)
     # print(row, col, value)
-    df = pandas.read_csv('index.csv', index_col=0, na_values='NaN', keep_default_na=False)
-    df.loc[int(row[1:]), col] = value
-    df.to_csv('index.csv', encoding='utf-8')
+    # df = pandas.read_csv('index.csv', index_col=0, na_values='NaN', keep_default_na=False)
+    # df.loc[int(row[1:]), col] = value
+    # df.to_csv('index.csv', encoding='utf-8')
     return 'ok'
 
 
@@ -415,9 +422,12 @@ def render_file(id_, filename):
             data = json.load(open(path))
             data = pprint.pformat(data)
         else:
-            with open(path) as f:
-                data = f.readlines()
-            data = ''.join(data)
+            if os.path.getsize(path) > 1024 ** 2:  # 1 MB
+                data = 'File too large'
+            else:
+                with open(path) as f:
+                    data = f.readlines()
+                data = ''.join(data)
 
         data = f"""
         <figure>
