@@ -53,11 +53,15 @@ def main(args=None):
 
     shutil.copy2(sys.argv[2], os.environ['MEMO_DIR'])
 
-    command = ' '.join(script_args)
     if args.slurm and os.path.basename(args.executable) == 'python':
-        command = f"{sys.executable} {args.script} {command}"
+        ex = sys.executable
     else:
-        command = f'{args.executable} {args.script} {command}'
+        ex = args.executable
+
+    script_args_str = ' '.join(script_args)
+    sep = ' -' if ' - ' not in script_args_str else ''
+
+    command = f'{ex} {args.script} {" ".join(script_args)}{sep} --memo_id {memo_idx}'
 
     if args.switch_dir:
         dest = os.environ['MEMO_DIR']
@@ -96,6 +100,8 @@ def main(args=None):
 
         bash_cmd = f"cd {os.environ['MEMO_DIR']}; sbatch run.sh"
         call_args = ['ssh', 'openmind7.mit.edu', 'bash', '--login', '-c', f'"{bash_cmd}"']
+                    #  "'bash --login -c " + f'"{bash_cmd}"' + "'"]
+        # import ipdb; ipdb.set_trace()
 
     else:
         with open(os.environ['MEMO_DIR'] + 'run.sh', 'w') as f:
@@ -123,10 +129,13 @@ def main(args=None):
     # requests.post('http://localhost:5000/wait-for-changes',
     #               data={'data': db.loc[db.index[-1:]].drop('show', 1).to_html()})
     if args.slurm:
-        out = subprocess.run(call_args, check=True,
-                            stderr=open('/dev/null', 'w'),
-                            stdout=subprocess.PIPE).stdout
-        print(out.decode('ascii').rstrip('\n'))
+        out = subprocess.run(call_args,
+                            stderr=subprocess.STDOUT, #open('/dev/null', 'w'),
+                            stdout=subprocess.PIPE)
+        # if len(out.stdout) > 0:
+        #     print(out.stdout.decode('ascii').rstrip('\n'))
+        # if out.stderr is not None:
+        print(out.stdout.decode('ascii').rstrip('\n'))
     else:
         if not args.follow:
             subprocess.Popen(['nohup'] + call_args, cwd=dest,
