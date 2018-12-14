@@ -1,10 +1,12 @@
-import os, datetime, json, pprint, pickle, base64, subprocess
+import os, datetime, json, pprint, pickle, base64, subprocess, argparse
 
 import numpy as np
 import pandas
 
 import flask
 from flask import Flask, request, jsonify, render_template
+from flask_socketio import SocketIO
+import pyinotify
 
 # from bokeh.client import pull_session
 # from bokeh.embed import server_session
@@ -21,10 +23,14 @@ import bokeh.resources
 MEMO_PATH = os.environ['MEMO']
 # '/braintree/data2/active/users/qbilius/memo/'
 
+parser = argparse.ArgumentParser()
+parser.add_argument('-p', '--port', default='5000', type=int)
+args = parser.parse_args()
 
 app = Flask(__name__)
 pandas.set_option('display.max_colwidth', -1)
-sub = ''
+socketio = SocketIO(app)
+thread = None
 
 
 class Plot(object):
@@ -281,19 +287,29 @@ class Plot(object):
 
 @app.route('/', methods=['GET'])
 def index():
-    nrecs = 1000
+    df = get_table(nrecs=30)
+    table = format_table(df)
+    template = render_template('index.html',
+                               table=table,
+                               resources=bokeh.resources.CDN.render(),
+                               async_mode=socketio.async_mode)
+    return template
+
+
+def get_table(nrecs=None):
     df = []
     for folder in sorted(os.listdir(os.environ['MEMO'])):
         meta_path = os.environ['MEMO'] + f'{folder}/meta.json'
         if os.path.isfile(meta_path):
-            # data = pandas.read_json(meta_path)
             data = json.load(open(meta_path))
-            data['args'] = ' '.join(data['args'])
+            key = 'args' if 'args' in data else 'script args'
+            data['script args'] = ' '.join(data[key])
             data['script'] = data.get('script', '')
             data['id'] = folder
             df.append(data)
     df = pandas.DataFrame(df)
     df = df[::-1]
+    nrecs = len(df) if nrecs is None else nrecs
     df = df[:nrecs]
     if len(df) < nrecs:
         df_old = pandas.read_csv('index.csv', index_col=0, na_values='NaN', keep_default_na=False)
@@ -305,41 +321,28 @@ def index():
         df = pandas.concat([df, df_old], ignore_index=True)
 
     df = df.set_index('id')
-    df = df[['script', 'slurm', 'args', 'tag', 'description', 'outcome']]
-    table = df.to_html(index_names=False)
-    table = format_table(table)
-    return render_template('index.html', table=table, resources=bokeh.resources.CDN.render())
-
-
-@app.route('/wait-for-changes', methods=['POST'])
-def wait_for_changes():
-    global sub
-    rows = request.form['data']
-    sub = format_table(rows, return_rows=True)
-    return 'ok'
-
-
-# def get_stream():
-#     global sub
-#     if len(sub) > 0:
-#         yield 'data: {}\n\n'.format(sub.replace('\n', ''))
-#         sub = ''
-#     # else:
-
-
-# @app.route('/send-rows')
-# def send_rows():
-#     return flask.Response(get_stream(),  #jsonify(rows=rows),
-#                           mimetype="text/event-stream")
+    # df = df[['script', 'slurm', 'args', 'tag', 'description', 'outcome']]
+    df = df[['script', 'script args', 'tag', 'description', 'outcome']]
+    return df
 
 
 def format_table(table, return_rows=False):
+    table = table.to_html(index_names=False)
     table = table.replace('border="1" class="dataframe"', 'class="table"')
     if return_rows:
         start = table.find('<tbody>\n') + 9
         end = table.find('</tbody>')
         table = table[start:end]
     return table
+
+
+@app.route('/search', methods=['POST'])
+def search():
+    search_term = json.loads(request.form['data'])
+    df = get_table()
+    df = df[df.apply(lambda col: col.astype(str).str.contains(search_term)).any(axis=1).values]
+    rows = format_table(df, return_rows=True)
+    return rows
 
 
 @app.route('/', methods=['POST'])
@@ -440,5 +443,21 @@ def render_file(id_, filename):
     return data
 
 
+class EventHandler(pyinotify.ProcessEvent):
+
+    def process_IN_CREATE(self, event):
+        if os.path.isdir(event.pathname):
+            df = format_table(get_table(nrecs=30), return_rows=True)
+            socketio.emit('folder updated', df)
+
+
+@socketio.on('connect')
+def socket_connect():
+    wm = pyinotify.WatchManager()
+    notifier = pyinotify.ThreadedNotifier(wm, EventHandler())
+    notifier.start()
+    wm.add_watch(os.environ['MEMO'], pyinotify.IN_CREATE)
+
+
 if __name__ == '__main__':
-    app.run(port=5000, debug=True)
+    app.run(port=args.port, debug=True)

@@ -4,13 +4,16 @@
     <link rel="stylesheet" href="https://unpkg.com/wingcss"/>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="stylesheet"
-      href="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/styles/tomorrow-night-bright.min.css">
+    href="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/styles/tomorrow-night-bright.min.css">
     <script src="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/highlight.min.js"></script>
     <script
-        src="https://code.jquery.com/jquery-3.2.1.min.js"
-        integrity="sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4="
-        crossorigin="anonymous">
+    src="https://code.jquery.com/jquery-3.2.1.min.js"
+    integrity="sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4="
+    crossorigin="anonymous">
     </script>
+    <script type="text/javascript" src="{{ url_for('static', filename='jquery.caret.min.js') }}"></script>
+    <script type="text/javascript" src="//cdnjs.cloudflare.com/ajax/libs/socket.io/1.3.6/socket.io.min.js"></script>
+
     {{ resources|safe }}
 </head>
 <body>
@@ -46,13 +49,15 @@
 
         // track changes
         var cellValue;
-        $('td').on('focus', function(event) {
+        $('table').on('focus', '.td', function(event) {
             cellValue = $(this).text();
         });
 
         // save changes
-        $('td').on('blur', function(event) {
+        $('table').on('blur', '.td', function(event) {
+            console.log('trying to save');
             if ($(this).text() != cellValue) {
+                console.log('saving!');
                 isDirty = true;
                 // var rowIndex = $(this).parent().index();
                 var rowName = $(this).parent().find('th').find('span').text();
@@ -66,17 +71,27 @@
         });
 
         // filter
+        // $('input').on('keyup',function(){
+        //     var searchTerm = $(this).val().toLowerCase();
+        //     $('table tbody tr').each(function(){
+        //         var lineStr = $(this).text().toLowerCase();
+        //         if (lineStr.indexOf(searchTerm) === -1) {
+        //             $(this).hide();
+        //         }
+        //         else {
+        //             $(this).show();
+        //         }
+        //     });
+        // });
         $('input').on('keyup',function(){
             var searchTerm = $(this).val().toLowerCase();
-            $('table tbody tr').each(function(){
-                var lineStr = $(this).text().toLowerCase();
-                if (lineStr.indexOf(searchTerm) === -1) {
-                    $(this).hide();
+            $.post("/search",
+                { data: JSON.stringify(searchTerm) },
+                function(filtered_table) {
+                    $('table tbody').html(filtered_table);
+                    setup_table();
                 }
-                else {
-                    $(this).show();
-                }
-            });
+            );
         });
 
         function format_rows(selector) {
@@ -101,7 +116,7 @@
                 $.post("/remove-rows",
                        { data: JSON.stringify(idx) },
                        function(data) {
-                           console.log(data);
+                        //    console.log(data);
                            if (data == 'ok') {
                                row.remove();
                                $('#notification').attr("class", "success");
@@ -137,8 +152,8 @@
             //         window.open(dropbox + idx);//, "_self");
             //     }
             // }
+            curIdx = $(this).parent().find('th').find('span').text();
             if (editable != "true") {
-                curIdx = $(this).parent().find('th').find('span').text();
                 curFile = 'results.pkl';
                 $('.selected-row').attr('class', '');
                 clearTimeout(selectionTimeout);
@@ -203,40 +218,47 @@
             }
         });
 
-        $(document).ready(function() {
+        $(document).ready(setup_table);
+
+        function setup_table() {
             // make some columns editable
             var descr_col = $("th:contains('description')").index();
             $("thead tr").children().eq(descr_col).attr("class", "description");
-            // var time_col = $("th:contains('timestamp')").index();
-            // $("thead tr").children().eq(time_col).attr("class", "timestamp")
             var outcome_col = $("th:contains('outcome')").index();
-            $("thead tr").children().eq(outcome_col).attr("class", "outcome");;
+            $("thead tr").children().eq(outcome_col).attr("class", "outcome");
+            $('td').attr("class", "td")
             format_rows($("tbody tr"));
             remove();
+            console.log('done table setup');
+        }
 
-            // setInterval(update_values, 5000);
-
-            // function update_values() {
-            // $.get("/send-rows", function(data) {
-            //     var rows = format_rows($(data.rows).filter('tr'));
-            //     $('table tbody').prepend(rows);
-            // });
-            // }
-
-
+        var socket = io.connect('http://' + document.domain + ':' + location.port);
+        socket.on('connect', function() {
+            socket.emit('my event', {data: 'I\'m connected!'});
+        });
+        socket.on('folder updated', function(data) {
+            var focused = document.activeElement;
+            if (focused.tagName == 'TD') {
+                var rowName = $(focused).parent().find('th').find('span').text();
+                var colIndex = $(focused).parent().children().index($(focused));
+                var value = $(focused).text()
+                var cellValue_old = cellValue;  // save unedited cell value
+                var caret_pos = $(focused).caret('pos');  // save caret position
+            };
+            $('table tbody').html(data);
+            setup_table();
+            if (focused.tagName == 'TD') {
+                var row = $('table').find("th.index span:contains('" + rowName + "')")[0];
+                var rowIndex = $(row).parent().parent().index() + 1;
+                var cell = $('table').find('tr:eq(' + rowIndex + ')')
+                        .find('td:eq(' + (colIndex - 1) + ')')[0];
+                $(cell).text(value);
+                $(cell).caret('pos', caret_pos);  // restore caret position
+                cellValue = cellValue_old;  // restore original unedited value
+                                            // for comparison when saving in blur
+            }
         });
 
-        // var source = new EventSource('/send-rows');
-        // source.onmessage = function(event) {
-        //     // alert('jonas');
-        //     if (event.data.length > 0) {
-        //         // console.log(event.data);
-        //         var rows = format_rows($(event.data).filter('tr'));
-        //         // console.log(rows);
-        //         $('table tbody').prepend(rows);
-        //         remove();
-        //     }
-        // };
     </script>
 </body>
 </html>
