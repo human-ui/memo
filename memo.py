@@ -1,164 +1,409 @@
 #!/usr/bin/env python
-import sys, os, shutil, argparse, subprocess, socket, datetime, json, time
+import os
+import sys
+import shutil
+import argparse
+import subprocess
+import socket
+import datetime
+import json
+import time
+import tempfile
+import getpass
+# import watchdog
 
-DATA_DIR = '/braintree/data2/active/users/qbilius/memo'
+
+DATA_DIR = os.environ['MEMO']
+DB_USER = 'qbilius'
+DB_HOST = 'braintree.mit.edu'
 
 
-def append_timestamp():
-    rec = json.load(open(os.environ['MEMO_DIR'] + 'meta.json', 'r'))
+def host_from_ip():
+    """
+    From: https://stackoverflow.com/a/166589
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("8.8.8.8", 80))
+    ip = s.getsockname()[0]
+    host, cluster = IPS.get(ip, 'localhost')
+    s.close()
+    if cluster == 'braintree':
+        node = ''.join(host.split('.')[0].split('-')[1:3])
+    else:
+        node = None
+    return host, cluster, node
+
+
+def exec_remote(command, user, host):
+    out = subprocess.run(['ssh', f'{user}@{host}',
+                          'bash', '--login', '-c', f'"{command}"'],
+                          stderr=subprocess.STDOUT,
+                          stdout=subprocess.PIPE)
+    return out.stdout.decode('ascii')
+            
+
+def get_db_env_var(varname):
+    out = exec_remote(f'echo ${varname}', DB_USER, DB_HOST)
+    var = out.split('\n')[-2] 
+    return var
+
+
+def get_memo_id(local_memo_dir):
+    rec = json.load(open(os.path.join(local_memo_dir, 'meta.json'), 'r'))
+    return rec['memo_id']
+
+
+def watch_and_sync(local_memo_dir):
+    db_memo = get_db_env_var('MEMO')
+    memo_id = get_memo_id(local_memo_dir)
+    db_memo_dir = os.path.join(db_memo, memo_id)
+    last_update = 0
+    while True:
+        this_update = os.path.getmtime(local_memo_dir)
+        if this_update > last_update:
+            last_update = this_update 
+            sync(local_memo_dir, db_memo_dir)
+        time.sleep(5)
+
+
+def sync(src, dst):
+    subprocess.Popen(['rsync', '-aq', f'{src}/',
+                      f'{DB_USER}@{DB_HOST}:{dst}']).wait()
+
+
+def on_exit(local_memo_dir):
+    """
+    Appends end time stamp after the process is over and syncing to db
+    """    
+    meta_path = os.path.join(local_memo_dir, 'meta.json')
+    try:
+        rec = json.load(open(meta_path, 'r'))
+    except:
+        time.sleep(1)
+        rec = json.load(open(meta_path, 'r'))
     rec['end_time'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    json.dump(rec, open(os.environ['MEMO_DIR'] + 'meta.json', 'w'), indent=4)
+    json.dump(rec, open(meta_path, 'w'), indent=4)
+
+    db_memo = get_db_env_var('MEMO')
+    memo_id = get_memo_id(local_memo_dir)
+    db_memo_dir = os.path.join(db_memo, memo_id)
+    sync(local_memo_dir, db_memo_dir)
 
 
-def main(args=None):
-    parser = argparse.ArgumentParser()
-    parser.add_argument('executable')
-    parser.add_argument('script')
-    parser.add_argument('-t', '--tag', default='')
-    parser.add_argument('-d', '--description', default='')
-    parser.add_argument('--slurm', action='store_true', default=False)
-    parser.add_argument('--switch_dir', action='store_true', default=True)
-    parser.add_argument('--follow', action='store_true', default=False)
-    parser.add_argument('--singularity', action='store_true', default=False)
-    args, script_args = parser.parse_known_args(args)
+class Local(object):
 
-    if args.slurm:
+    host = 'localhost'
+    executor = 'sh'
+
+    def __init__(self, user=None):
+        self.user = getpass.getuser() if user is None else user
+
+        self.args = None
+
+        # memo_idx = ''.join(random.SystemRandom().choice(string.ascii_lowercase) for _ in range(4))
+        self.memo_id = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+
+        local_host, cluster, node = host_from_ip()
+        if local_host == self.host:
+            self.memo_dir = tempfile.mkdtemp()
+        else:
+            command = 'python -c '+ "'import tempfile; print(tempfile.mkdtemp())'"
+            out = self.exec_remote(command)                
+            self.memo_dir = out.split('\n')[-2]
+        print('memo id:', self.memo_id)
+
+    def parser(self, args):
+        return args
+
+    def gen_batch_script(self, command, prefix=''):
+        script = ['#!/bin/sh',
+                  prefix,  
+                  f'export MEMO_DIR={self.memo_dir}',
+                  f'nohup memo watch_and_sync {self.memo_dir} -- --memo_id {self.memo_id} &',
+                  'WATCH_PID=$!',
+                  command,
+                  'kill $WATCH_PID',
+                  f'memo on_exit {self.memo_dir}']
+        return script
+
+    def exec_remote(self, command):
+        return exec_remote(command, self.user, self.host)
+
+
+class BrainTree(Local):
+
+    executor = 'sh'
+
+    def __init__(self, user=None, node='cpu'):
+        if node.startswith('gpu'):
+            num = node[-1]
+            node = node[:-1]
+        else:
+            num = '1'
+        self.host = f'braintree-{node}-{num}.mit.edu'
+        super().__init__(user=user)
+
+
+class OpenMind(Local):
+
+    host = 'openmind7.mit.edu'
+    executor = 'sbatch'
+
+    def parser(self, args):
         parser = argparse.ArgumentParser()
         parser.add_argument('-t', '--time', default='4-00:00:00')
         parser.add_argument('-n', '--ntasks', default=1, type=int)
         parser.add_argument('-c', '--cpus_per_task', default=5, type=int)
-        parser.add_argument('--gres', default='gpu:GEFORCEGTX1080TI:1')  # titan-x, GEFORCEGTX1080TI
+        parser.add_argument('--gpu', default='1080ti:1')
         parser.add_argument('--mem', default='40G')
         parser.add_argument('--qos', action='store_true', default=False)
-        parser.add_argument('--job_name', default=None)
+        parser.add_argument('--jobname', default=None)
+        parser.add_argument(
+            '--singularity', action='store_true', default=False)
+        self.args, script_args = parser.parse_known_args(args)
+        return script_args
 
-        slurm_kwargs, script_args = parser.parse_known_args(script_args)
-        if slurm_kwargs.qos:
-            slurm_kwargs.qos = 'dicarlo'
+    def gen_batch_script(self, command):
+        script = []
+        for k, v in self.args.__dict__.items():
+            key = k.replace('_', '-')
+            key = f'-{key}' if len(key) == 1 else f'--{key}'
+
+            if k == 'gpu':
+                key = '--gres'
+                if v.startswith('1080ti'):
+                    v = f'gpu:GEFORCEGTX1080TI:{v.split(":")[-1]}'
+                else:
+                    v = f'gpu:{v}'
+
+            skip = False
+            if key == 'qos':
+                if v:
+                    v = 'dicarlo'
+                else:
+                    skip = True
+            elif key == 'jobname' and v is None:
+                skip = True
+
+            if not skip:
+                script.append(f'#SBATCH {key}={v}')
+
+        script.append('')
+        script.append(f'export MEMO_DIR={self.memo_dir}')
+        if self.args.singularity:
+            script.append(f'singularity exec --bind /braintree:/braintree '
+                          f'--bind /home:/home --bind /om:/om --nv '
+                          f'docker://nvidia/cuda:9.0-cudnn7-runtime-centos7 '
+                          f'{command}')
         else:
-            delattr(slurm_kwargs, 'qos')
+            script.append(command)
+        return script
 
-        if slurm_kwargs.job_name is None:
-            delattr(slurm_kwargs, 'job_name')
 
-    # memo_idx = ''.join(random.SystemRandom().choice(string.ascii_lowercase) for _ in range(4))
-    memo_idx = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    os.environ['MEMO_DIR'] = os.path.join(DATA_DIR, memo_idx) + os.sep
+class VSC(Local):
 
-    if not os.path.isdir(os.environ['MEMO_DIR']):
-        os.makedirs(os.environ['MEMO_DIR'])
-        print('memo id:', memo_idx)
+    host = 'login1-tier2.hpc.kuleuven.be',
+    executor = 'qsub'
+
+    def __init__(self, user='vsc32603'):
+        super().__init__(user=user)
+ 
+    def parser(self, args):
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--time', default='4:00:00:00')
+        parser.add_argument('--nodes', default=1, type=int)
+        parser.add_argument('--pmem', default='40gb')
+        parser.add_argument('--pvmem', default=None)
+        parser.add_argument('--gpus', default=1, type=int)
+        # parser.add_argument('--qos', default='q72h')
+        parser.add_argument('-N', '--job_name', default=None)
+        parser.add_argument('-A', '--project_name', default='default_project')
+        self.args, script_args = parser.parse_known_args(args)
+        return script_args
+
+    def gen_batch_script(self, command):
+        l_options = ['time', 'pmem', 'pvmem', 'qos']
+        l_list = []
+        pbs = []
+        for k, v in self.args.__dict__.items():
+            # k = k.replace('_', '-')
+            option = None
+            if k in l_options:
+                if k == 'time':
+                    l_list.append(f'walltime={v}')
+                elif v is not None:
+                    l_list.append(f'{k}={v}')
+            elif k == 'nodes':
+                nodes = v
+            elif k == 'gpus':
+                gpus = v
+            elif k == 'job_name':
+                option = f'-N {v}'
+            elif k == 'project_name':
+                # if v is not None:
+                option = f'-A {v}'
+            else:
+                raise ValueError(f'Option {k} with value {v} not recognized.')
+
+            if option is not None and v is not None:
+                pbs.append(option)
+
+        l_list += [f'nodes={nodes}:ppn={9 * gpus}:gpus={gpus}',
+                   'partition=gpu']
+        pbs.append('-l ' + ",".join(l_list))
+        pbs = ' '.join(pbs)
+
+        script = []
+        script.append(f'#PBS {pbs}')
+        script.append('')
+        script.append(f'export MEMO_DIR={self.memo_dir}')
+        script.append('cd $MEMO_DIR')
+        script.append('')
+        script.append(command)
+        return script
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('executable')
+    parser.add_argument('script')
+    # if sys.argv[1] == 'rmemo' or '--remote' in sys.argv:
+    #     parser.add_argument('login')
+    parser.add_argument('-t', '--tag', default='')
+    parser.add_argument('-d', '--description', default='')
+    parser.add_argument('--cluster', choices=['local', 'braintree', 'om', 'vsc'])
+    parser.add_argument('--node', default='gpu3')
+    # parser.add_argument('--remote', action='store_true', default=False)
+    parser.add_argument('--keep_cwd', action='store_true', default=False)
+    parser.add_argument('--follow', action='store_true', default=False)
+    parser.add_argument('--dry', action='store_true', default=False)
+
+    args, extra_args = parser.parse_known_args()    
+    local_host, cluster, node = host_from_ip()  
+    if args.cluster is None:
+        args.cluster = cluster
+        args.node = node
+
+    cluster = CLUSTERS[args.cluster]
+    if args.cluster == 'braintree':
+        cluster = cluster(node=args.node)
     else:
-        raise ValueError('{} already exists'.format(os.environ['MEMO_DIR']))
+        cluster = cluster()
+    script_args = cluster.parser(extra_args)
+    remote = local_host != cluster.host
 
-    shutil.copy2(sys.argv[2], os.environ['MEMO_DIR'])
-
-    if args.slurm and os.path.basename(args.executable) == 'python':
+    # Form call command
+    if os.path.basename(args.executable) == 'python':
         ex = sys.executable
     else:
         ex = args.executable
-
     script_args_str = ' '.join(script_args)
-    sep = ' -' if ' - ' not in script_args_str else ''
+    
+    # Add memo_id to the command for easy tracking
+    sep = ' -- ' if ' -- ' not in script_args_str else ' '
+    command = f'{ex} {args.script} {script_args_str}{sep}--memo_id {cluster.memo_id}'
 
-    command = f'{ex} {args.script} {" ".join(script_args)}{sep} --memo_id {memo_idx}'
+    # Prepare run.sh script
+    script = cluster.gen_batch_script(command)
 
-    if args.switch_dir:
-        dest = os.environ['MEMO_DIR']
+    # Define working dir where we will cd to
+    if remote:
+        working_dir = cluster.memo_dir
     else:
-        dest = os.getcwd()
-
-    if args.slurm:
-        with open(os.environ['MEMO_DIR'] + 'run.sh', 'w') as f:
-            f.write('#!/bin/sh\n')
-            for k,v in slurm_kwargs.__dict__.items():
-                key = k.replace('_', '-')
-                key = f'-{key}' if len(key) == 1 else f'--{key}'
-                skip = False
-                if key == 'qos':
-                    if v:
-                        v = 'dicarlo'
-                    else:
-                        skip = True
-                elif key == 'jobname' and v is None:
-                    skip = True
-
-                if not skip:
-                    f.write(f'#SBATCH {key}={v}\n')
-
-            f.write('\n')
-            f.write(f"export MEMO_DIR={os.environ['MEMO_DIR']}\n")
-            if args.singularity:
-                f.write(f'singularity exec --bind /braintree:/braintree '
-                        f'--bind /home:/home --bind /om:/om --nv '
-                        f'docker://nvidia/cuda:9.0-cudnn7-runtime-centos7 '
-                        f'{command}\n')
-            else:
-                f.write(f'{command}\n')
-
-            f.write('memo append_timestamp\n')
-
-        bash_cmd = f"cd {os.environ['MEMO_DIR']}; sbatch run.sh"
-        call_args = ['ssh', 'openmind7.mit.edu', 'bash', '--login', '-c', f'"{bash_cmd}"']
-                    #  "'bash --login -c " + f'"{bash_cmd}"' + "'"]
-        # import ipdb; ipdb.set_trace()
-
-    else:
-        with open(os.environ['MEMO_DIR'] + 'run.sh', 'w') as f:
-            # f.write(f'cd {dest}\n')
-            f.write(f'{command}\n')
-            f.write('memo append_timestamp\n')
-
-        call_args = ['sh', os.environ['MEMO_DIR'] + 'run.sh']
-
-    rec = {'start_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'executable': args.executable,
-            'script': args.script,
-            'args': script_args,
-            'host': socket.gethostname(),
-            'working dir': os.path.abspath(os.getcwd()),
-            'tag': args.tag,
-            'description': args.description,
-            'outcome': '',
-            'slurm': args.slurm,
-            'switch_dir': args.switch_dir,
-            'show': True}
-
-    json.dump(rec, open(os.environ['MEMO_DIR'] + 'meta.json', 'w'), indent=4)
-
-    # requests.post('http://localhost:5000/wait-for-changes',
-    #               data={'data': db.loc[db.index[-1:]].drop('show', 1).to_html()})
-    if args.slurm:
-        out = subprocess.run(call_args,
-                            stderr=subprocess.STDOUT, #open('/dev/null', 'w'),
-                            stdout=subprocess.PIPE)
-        # if len(out.stdout) > 0:
-        #     print(out.stdout.decode('ascii').rstrip('\n'))
-        # if out.stderr is not None:
-        print(out.stdout.decode('ascii').rstrip('\n'))
-    else:
-        if not args.follow:
-            subprocess.Popen(['nohup'] + call_args, cwd=dest,
-                            stdin=open('/dev/null', 'w'),
-                            stdout=open(os.environ['MEMO_DIR'] + 'log.out', 'a'),
-                            stderr=open(os.environ['MEMO_DIR'] + 'log.out', 'a'))
-            time.sleep(1)
-            subprocess.Popen(['cat', os.environ['MEMO_DIR'] + 'log.out'])
+        if args.keep_cwd:
+            working_dir = os.getcwd()
         else:
-            p = subprocess.Popen(call_args, cwd=dest)
+            working_dir = os.path.expandvars(cluster.memo_dir)
+
+    # Define what to store in meta.json
+    rec = {'start time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+           'full_command': ' '.join(sys.argv),
+           'local host': local_host,
+           'working dir': os.path.abspath(os.getcwd()),
+           'remote host': cluster.host,
+           'user': cluster.user,
+           'cluster args': getattr(cluster.args, '__dict__', None),
+           'script args': script_args,
+           'outcome': '',
+           'show': True,
+           'memo_id': cluster.memo_id}
+    rec.update(args.__dict__)    
+
+    # Copy everything to memo_dir
+    login = f'{cluster.user}@{cluster.host}'
+    if not args.dry:
+        if remote:  # need to set up a local folder first
+            local_memo_dir = tempfile.mkdtemp()
+        else:  # local folder is already available
+            local_memo_dir = cluster.memo_dir
+        print(local_memo_dir)
+
+        shutil.copy2(sys.argv[2], local_memo_dir)
+        with open(os.path.join(local_memo_dir, 'run.sh'), 'w') as f:
+            f.write('\n'.join(script))
+        meta_file = open(os.path.join(local_memo_dir, 'meta.json'), 'w')
+        json.dump(rec, meta_file, indent=4)
+
+        if remote:                 
+            copy_files = ['rsync', '-aq',
+                          f'{local_memo_dir}/',
+                          f'{login}:{cluster.memo_dir}']
+            out = subprocess.run(' '.join(copy_files), shell=True, check=True)
+
+    # Call run.sh
+    call_args = [cluster.executor, 'run.sh']
+
+    if remote:
+        bash_cmd = f'cd {working_dir}; ' + ' '.join(call_args)
+        if not args.dry:
+            out = cluster.exec_remote(bash_cmd)        
+            if args.cluster == 'om':  # print job id
+                print(out.rstrip('\n'))
+
+    else:
+        local_memo_dir = os.path.expandvars(local_memo_dir)
+
+        if not args.follow:
+            logfile = os.path.join(local_memo_dir, 'log.out')
+            subprocess.Popen(['nohup'] + call_args, cwd=working_dir,
+                             stdin=open('/dev/null', 'w'),
+                             stdout=open(logfile, 'a'),
+                             stderr=open(logfile, 'a'))
+            time.sleep(1)
+            subprocess.Popen(['cat', logfile])
+        else:
+            p = subprocess.Popen(call_args, cwd=working_dir)
             try:
                 p.wait()
             except KeyboardInterrupt:
                 p.terminate()
 
+    # requests.post('http://localhost:5000/wait-for-changes',
+    #               data={'data': db.loc[db.index[-1:]].drop('show', 1).to_html()})
+
+
+CLUSTERS = {'local': Local,
+            'braintree': BrainTree,
+            'om': OpenMind,
+            'vsc': VSC}
+
+IPS = {
+    '18.93.6.23': ('braintree-cpu-1.mit.edu', 'braintree'),
+    '18.93.6.11': ('braintree-gpu-1.mit.edu', 'braintree'),
+    '18.93.6.12': ('braintree-gpu-2.mit.edu', 'braintree'),
+    '18.93.5.253': ('braintree-gpu-3.mit.edu', 'braintree'),
+    '18.93.6.27': ('braintree-gpu-4.mit.edu', 'braintree'),
+    '18.13.53.52': ('openmind7.mit.edu', 'om'),
+    '10.118.230.3': ('login1-tier2.hpc.kuleuven.be', 'vsc')
+}
+
 
 if __name__ == '__main__':
-    if len(sys.argv) == 1:
-        print('nothing to do')
+    if 'on_exit' in sys.argv:
+        idx = sys.argv.index('on_exit')
+        on_exit(sys.argv[idx + 1])
+    elif 'watch_and_sync' in sys.argv:
+        idx = sys.argv.index('watch_and_sync')
+        watch_and_sync(sys.argv[idx + 1])
     else:
-        if sys.argv[1] == 'append_timestamp':
-            append_timestamp()
-        elif sys.argv[1] == 'smemo':
-            main(sys.argv + ['--slurm'])
-        else:
-            main()
+        main()
