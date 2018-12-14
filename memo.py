@@ -1,35 +1,45 @@
 #!/usr/bin/env python
 import os
 import sys
-import shutil
 import argparse
-import subprocess
-import socket
+import configparser
 import datetime
-import json
-import time
-import tempfile
 import getpass
+import json
+import shutil
+import socket
+import subprocess
+import tempfile
+import time
 
 
 DATA_DIR = os.environ['MEMO']
-DB_USERNAME = 'qbilius'
-DB_HOST = 'braintree.mit.edu'
+CONFIG = configparser.ConfigParser()
+CONFIG.read(os.path.expanduser('~/.memo'))
+
+"""
+Config structure:
+
+[db]
+user = ...
+host = braintree.mit.edu
+
+[braintree]
+user = ...
+
+[om]
+user = ...
+qos = dicarlo
+
+[vsc]
+user = ...
+"""
 
 
-# def requires_memoid(func):
-#     """
-#     Checks if MEMO_DIR is present in environment.
-#     If not, the calling function does nothing.
-#     """
-#     def func_wrapper(*args, **kwargs):
-#         if os.getenv('MEMO_DIR') is not None:
-#             func(*args, **kwargs)
-#     return func_wrapper
-
-
-def host_from_ip():
+def get_host_properties():
     """
+    Get host, cluster name and node using IP addres
+
     From: https://stackoverflow.com/a/166589
     """
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -44,30 +54,23 @@ def host_from_ip():
     return host, cluster, node
 
 
-def watch_and_sync(local_memo_dir):
-    db_memo = get_db_env_var('MEMO')
-    memo_id = get_memo_id(local_memo_dir)
-    db_memo_dir = os.path.join(db_memo, memo_id)
-    last_update = 0
-    while True:
-        time.sleep(5)
-        this_update = os.path.getmtime(local_memo_dir)
-        if this_update > last_update:
-            last_update = this_update
-            sync(local_memo_dir, db_memo_dir)
+def exec_remote(command, user, host):
+    """
+    Execute a command on a remote server and return stdout output
+    """
+    out = subprocess.run(['ssh', f'{user}@{host}',
+                          'bash', '--login', '-c', f'"{command}"'],
+                          stderr=subprocess.STDOUT,
+                          stdout=subprocess.PIPE)
+    return out.stdout.decode('ascii')
+            
 
-
-def get_db_env_var(varname):
-    command = f'"echo ${varname}"'
-    out = subprocess.run(['ssh', f'{DB_USERNAME}@{DB_HOST}',
-                            'bash', '--login', '-c', command],
-                            stderr=subprocess.STDOUT,
-                            stdout=subprocess.PIPE)
-    # out.stdout.decode('ascii')
-    # out = subprocess.check_output(['ssh', f'{DB_USERNAME}@{DB_HOST}',
-    #                                 f"sh -l -c 'echo ${varname}'"])
-    # import ipdb; ipdb.set_trace()
-    var = out.stdout.decode('ascii').split('\n')[-2]
+def get_remote_env_var(varname, user, host):
+    """
+    Get an environment variable from a remote server
+    """
+    out = exec_remote(f'echo ${varname}', user, host)
+    var = out.split('\n')[-2] 
     return var
 
 
@@ -76,15 +79,34 @@ def get_memo_id(local_memo_dir):
     return rec['memo_id']
 
 
+def watch_and_sync(local_memo_dir, sleep=5):
+    """
+    Watches a folder and syncs it to db
+    """
+    db_memo = get_remote_env_var('MEMO', CONFIG['db']['user'], CONFIG['db']['host'])
+    memo_id = get_memo_id(local_memo_dir)
+    db_memo_dir = os.path.join(db_memo, memo_id)
+    last_update = 0
+    while True:
+        this_update = os.path.getmtime(local_memo_dir)
+        if this_update > last_update:
+            last_update = this_update 
+            sync(local_memo_dir, db_memo_dir)
+        time.sleep(sleep)
+
+
 def sync(src, dst):
+    """
+    Sync local source folder to a remote destination
+    """
     subprocess.Popen(['rsync', '-aq', f'{src}/',
-                      f'{DB_USERNAME}@{DB_HOST}:{dst}']).wait()
+                      f"{CONFIG['db']['user']}@{CONFIG['db']['host']}:{dst}"]).wait()
 
 
 def on_exit(local_memo_dir):
     """
-    Appends end time stamp after the process is over and syncing to db
-    """
+    Appends end time stamp after the process is over and syncs to db
+    """    
     meta_path = os.path.join(local_memo_dir, 'meta.json')
     try:
         rec = json.load(open(meta_path, 'r'))
@@ -94,72 +116,45 @@ def on_exit(local_memo_dir):
     rec['end_time'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     json.dump(rec, open(meta_path, 'w'), indent=4)
 
-    db_memo = get_db_env_var('MEMO')
+    db_memo = get_remote_env_var('MEMO', CONFIG['db']['user'], CONFIG['db']['host'])
     memo_id = get_memo_id(local_memo_dir)
     db_memo_dir = os.path.join(db_memo, memo_id)
     sync(local_memo_dir, db_memo_dir)
-
-
-
-
-
-# def watch_and_sync():
-#     observer = watchdog.observers.Observer()
-#     observer.schedule(event_handler, self.DIRECTORY_TO_WATCH, recursive=True)
-#     observer.start()
-
-
-# class Handler(watchdog.events.FileSystemEventHandler):
-
-#     @staticmethod
-#     def on_any_event(event):
-#         sync()
-
-
-
-# @requires_memoid
-# def sync():
-#     """
-#     Used for syncing files from local storage to remote
-#     """
-#     memo_id = os.path.basename(os.environ['MEMO_DIR'])
-#     remote_memo = get_db_env_var('MEMO')
-#     remote_memo_dir = os.path.join(remote_memo, memo_id)
-#     subprocess.Popen(['rsync', '-aP', os.environ['MEMO_DIR'],
-#                       f'qbilius@braintree.mit.edu:{remote_memo_dir}'])
+    shutil.rmtree(local_memo_dir)
 
 
 class Local(object):
 
+    cluster = 'localhost'
     host = 'localhost'
     executor = 'sh'
 
-    def __init__(self, user=None):
-        self.user = getpass.getuser() if user is None else user
+    def __init__(self):
+        if self.cluster == 'localhost':
+            self.user = getpass.getuser()
+        else:
+            self.user = CONFIG[self.cluster]['user']
 
         self.args = None
 
         # memo_idx = ''.join(random.SystemRandom().choice(string.ascii_lowercase) for _ in range(4))
         self.memo_id = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
 
-        local_host, cluster, node = host_from_ip()
+        local_host = get_host_properties()[0]
         if local_host == self.host:
             self.memo_dir = tempfile.mkdtemp()
         else:
             command = 'python -c '+ "'import tempfile; print(tempfile.mkdtemp())'"
-            out = self.exec_remote(command)
+            out = self.exec_remote(command)                
             self.memo_dir = out.split('\n')[-2]
         print('memo id:', self.memo_id)
-        # self.memo_dir = f'$MEMO/{self.memo_idx}/'
-        # os.environ['MEMO_ID'] = self.memo_id
-        # os.environ['MEMO_DIR'] = self.memo_dir
 
     def parser(self, args):
         return args
 
     def gen_batch_script(self, command, prefix=''):
         script = ['#!/bin/sh',
-                  prefix,
+                  prefix,  
                   f'export MEMO_DIR={self.memo_dir}',
                   f'nohup memo watch_and_sync {self.memo_dir} -- --memo_id {self.memo_id} &',
                   'WATCH_PID=$!',
@@ -169,29 +164,27 @@ class Local(object):
         return script
 
     def exec_remote(self, command):
-        out = subprocess.run(['ssh', f'{self.user}@{self.host}',
-                            'bash', '--login', '-c', command],
-                            stderr=subprocess.STDOUT,
-                            stdout=subprocess.PIPE)
-        return out.stdout.decode('ascii')
+        return exec_remote(command, self.user, self.host)
 
 
 class BrainTree(Local):
 
+    cluster = 'braintree'
     executor = 'sh'
 
-    def __init__(self, user=None, node='cpu'):
+    def __init__(self, node='cpu'):
         if node.startswith('gpu'):
             num = node[-1]
             node = node[:-1]
         else:
             num = '1'
         self.host = f'braintree-{node}-{num}.mit.edu'
-        super().__init__(user=user)
+        super().__init__()
 
 
 class OpenMind(Local):
 
+    cluster = 'om'
     host = 'openmind7.mit.edu'
     executor = 'sbatch'
 
@@ -225,7 +218,7 @@ class OpenMind(Local):
             skip = False
             if key == 'qos':
                 if v:
-                    v = 'dicarlo'
+                    v = CONFIG['om']['qos']
                 else:
                     skip = True
             elif key == 'jobname' and v is None:
@@ -248,12 +241,13 @@ class OpenMind(Local):
 
 class VSC(Local):
 
+    cluster = 'vsc'
     host = 'login1-tier2.hpc.kuleuven.be',
     executor = 'qsub'
 
-    def __init__(self, user='vsc32603'):
-        super().__init__(user=user)
-
+    def __init__(self):
+        super().__init__()
+ 
     def parser(self, args):
         parser = argparse.ArgumentParser()
         parser.add_argument('--time', default='4:00:00:00')
@@ -272,7 +266,6 @@ class VSC(Local):
         l_list = []
         pbs = []
         for k, v in self.args.__dict__.items():
-            # k = k.replace('_', '-')
             option = None
             if k in l_options:
                 if k == 'time':
@@ -286,7 +279,6 @@ class VSC(Local):
             elif k == 'job_name':
                 option = f'-N {v}'
             elif k == 'project_name':
-                # if v is not None:
                 option = f'-A {v}'
             else:
                 raise ValueError(f'Option {k} with value {v} not recognized.')
@@ -313,20 +305,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('executable')
     parser.add_argument('script')
-    # if sys.argv[1] == 'rmemo' or '--remote' in sys.argv:
-    #     parser.add_argument('login')
     parser.add_argument('-t', '--tag', default='')
     parser.add_argument('-d', '--description', default='')
     parser.add_argument('--cluster', choices=['local', 'braintree', 'om', 'vsc'])
     parser.add_argument('--node', default='gpu3')
-    # parser.add_argument('--remote', action='store_true', default=False)
     parser.add_argument('--keep_cwd', action='store_true', default=False)
     parser.add_argument('--follow', action='store_true', default=False)
     parser.add_argument('--dry', action='store_true', default=False)
 
-    args, extra_args = parser.parse_known_args()
-    local_host, cluster, node = host_from_ip()
-    if args.cluster is None:
+    args, extra_args = parser.parse_known_args()    
+    local_host, cluster, node = get_host_properties()  
+    if args.cluster is None:  # run where you currently are
         args.cluster = cluster
         args.node = node
 
@@ -335,8 +324,10 @@ def main():
         cluster = cluster(node=args.node)
     else:
         cluster = cluster()
-    script_args = cluster.parser(extra_args)
     remote = local_host != cluster.host
+
+    # Parse host-specific arguments
+    script_args = cluster.parser(extra_args)
 
     # Form call command
     if os.path.basename(args.executable) == 'python':
@@ -344,6 +335,7 @@ def main():
     else:
         ex = args.executable
     script_args_str = ' '.join(script_args)
+
     # Add memo_id to the command for easy tracking
     sep = ' -- ' if ' -- ' not in script_args_str else ' '
     command = f'{ex} {args.script} {script_args_str}{sep}--memo_id {cluster.memo_id}'
@@ -372,28 +364,27 @@ def main():
            'outcome': '',
            'show': True,
            'memo_id': cluster.memo_id}
-    rec.update(args.__dict__)
+    rec.update(args.__dict__)    
 
     # Copy everything to memo_dir
     login = f'{cluster.user}@{cluster.host}'
     if not args.dry:
-        if remote:
+        if remote:  # need to set up a local folder first
             local_memo_dir = tempfile.mkdtemp()
-        else:
+        else:  # local folder is already available
             local_memo_dir = cluster.memo_dir
         print(local_memo_dir)
 
-        # with tempfile.TemporaryDirectory() as dirname:
         shutil.copy2(sys.argv[2], local_memo_dir)
-        with open(os.path.join(cluster.memo_dir, 'run.sh'), 'w') as f:
+        with open(os.path.join(local_memo_dir, 'run.sh'), 'w') as f:
             f.write('\n'.join(script))
         meta_file = open(os.path.join(local_memo_dir, 'meta.json'), 'w')
         json.dump(rec, meta_file, indent=4)
 
-        if remote:
+        if remote:                 
             copy_files = ['rsync', '-aq',
-                          os.path.join(local_memo_dir, '*'),
-                          f'{login}:{local_memo_dir}']
+                          f'{local_memo_dir}/',
+                          f'{login}:{cluster.memo_dir}']
             out = subprocess.run(' '.join(copy_files), shell=True, check=True)
 
     # Call run.sh
@@ -402,7 +393,7 @@ def main():
     if remote:
         bash_cmd = f'cd {working_dir}; ' + ' '.join(call_args)
         if not args.dry:
-            out = cluster.exec_remote(bash_cmd)
+            out = cluster.exec_remote(bash_cmd)        
             if args.cluster == 'om':  # print job id
                 print(out.rstrip('\n'))
 
@@ -442,7 +433,6 @@ IPS = {
 
 
 if __name__ == '__main__':
-    # watch_and_sync('/tmp/tmp3ai6985k')
     if 'on_exit' in sys.argv:
         idx = sys.argv.index('on_exit')
         on_exit(sys.argv[idx + 1])
