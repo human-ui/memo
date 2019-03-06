@@ -40,6 +40,7 @@
         var curIdx = 0;
         var curFile = '';
         var selectionTimeout = null;
+        var lastFolderPath = '';
 
          // warn about unsaved changes
         $(window).on('beforeunload', function(){
@@ -60,7 +61,7 @@
                 console.log('saving!');
                 isDirty = true;
                 // var rowIndex = $(this).parent().index();
-                var rowName = $(this).parent().find('th').find('span').text();
+                var rowName = $(this).parent().find('th').find('div.id').text();
                 var col = $(this).parent().children().index($(this));
                 var colName = $(this).closest("table").find("th").eq(col).text();
                 $.post("/",
@@ -105,39 +106,39 @@
                 $(this).children().eq(descr_col).attr("contenteditable", true);
                 $(this).children().eq(outcome_col).attr("contenteditable", true);
                 $(this).children().eq(0).attr("class", "index");
+                var this_id = $(this).children().eq(0).text();
                 $(this).children().eq(0).html('<div class="remove">x</div>' +
-                                              '<span>' + $(this).children().eq(0).text() + '</span>');
+                                              '<div class="id">' + this_id + '</div>');
             });
             return selector
         }
 
-        function remove() {
-            $('.remove').click(function() {
-                var row = $(this).parent().parent();
-                var idx = $(this).parent().find('span').text();
-                $.post("/remove-rows",
-                       { data: JSON.stringify(idx) },
-                       function(data) {
-                        //    console.log(data);
-                           if (data == 'ok') {
-                               row.remove();
-                               $('#notification').attr("class", "success");
-                               $('#notification').text(idx + ' removed successfully')
-                                    .fadeIn()
-                                    .delay(2000)
-                                    .fadeOut();
-                           }
-                           else {
-                               $('#notification').attr("class", "error");
-                               $('#notification').text('Could not remove ' + idx)
-                                    .fadeIn()
-                                    .delay(2000)
-                                    .fadeOut();
-                               }
-                           }
-                );
-            });
-        }
+        // function remove() {
+        $('table').on('click', '.remove', function() {
+            var row = $(this).parent().parent();
+            var idx = $(this).parent().find('div.id').text();
+            $.post("/remove-rows",
+                    { data: JSON.stringify(idx) },
+                    function(data) {
+                        if (data == 'ok') {
+                            row.remove();
+                            $('#notification').attr("class", "success");
+                            $('#notification').text(idx + ' removed successfully')
+                                .fadeIn()
+                                .delay(2000)
+                                .fadeOut();
+                        }
+                        else {
+                            $('#notification').attr("class", "error");
+                            $('#notification').text('Could not remove ' + idx)
+                                .fadeIn()
+                                .delay(2000)
+                                .fadeOut();
+                            }
+                        }
+            );
+        });
+        // }
 
         $('table').on('click', 'td', function(event) {
             var editable = $(this).closest('td')[0].getAttribute('contenteditable');
@@ -154,7 +155,7 @@
             //         window.open(dropbox + idx);//, "_self");
             //     }
             // }
-            curIdx = $(this).parent().find('th').find('span').text();
+            curIdx = $(this).parent().find('th').find('div.id').text();
             if (editable != "true") {
                 curFile = 'results.pkl';
                 $('.selected-row').attr('class', '');
@@ -214,8 +215,8 @@
             }
         }, 60*1000);
 
-        $(document).keyup(function(e) {
-            if (e.keyCode == 27) {
+        $(document).keyup(function(event) {
+            if (event.key == 'Escape') {
                 $('#popclose').trigger('click');
             }
         });
@@ -230,8 +231,6 @@
             $("thead tr").children().eq(outcome_col).attr("class", "outcome");
             $('td').attr("class", "td")
             format_rows($("tbody tr"));
-            remove();
-            console.log('done table setup');
         }
 
         var socket = io.connect('http://' + document.domain + ':' + location.port);
@@ -239,25 +238,35 @@
             socket.emit('my event', {data: 'I\'m connected!'});
         });
         socket.on('folder updated', function(data) {
-            var focused = document.activeElement;
-            if (focused.tagName == 'TD') {
-                var rowName = $(focused).parent().find('th').find('span').text();
-                var colIndex = $(focused).parent().children().index($(focused));
-                var value = $(focused).text()
-                var cellValue_old = cellValue;  // save unedited cell value
-                var caret_pos = $(focused).caret('pos');  // save caret position
-            };
-            $('table tbody').html(data);
-            setup_table();
-            if (focused.tagName == 'TD') {
-                var row = $('table').find("th.index span:contains('" + rowName + "')")[0];
-                var rowIndex = $(row).parent().parent().index() + 1;
-                var cell = $('table').find('tr:eq(' + rowIndex + ')')
-                        .find('td:eq(' + (colIndex - 1) + ')')[0];
-                $(cell).text(value);
-                $(cell).caret('pos', caret_pos);  // restore caret position
-                cellValue = cellValue_old;  // restore original unedited value
-                                            // for comparison when saving in blur
+            // watchdog is emitting same events multiple times
+            // so we must account for that
+            if (data[1] != lastFolderPath) {
+                lastFolderPath = data[1]
+
+                var focused = document.activeElement;
+                if (focused.tagName == 'TD') {
+                    var rowName = $(focused).parent().find('th').find('div.id').text();
+                    var colIndex = $(focused).parent().children().index($(focused));
+                    var value = $(focused).text()
+                    var cellValue_old = cellValue;  // save unedited cell value
+                    var caret_pos = $(focused).caret('pos');  // save caret position
+                };
+                
+                data = $.parseHTML(data[0])
+                data = $($.map(data, function(el){return $.makeArray(el)}));
+                data = format_rows(data);
+                $('table tbody').prepend(data);
+                $('td').attr("class", "td");
+                if (focused.tagName == 'TD') {
+                    var row = $('table').find("th.index div.id:contains('" + rowName + "')")[0];
+                    var rowIndex = $(row).parent().parent().index() + 1;
+                    var cell = $('table').find('tr:eq(' + rowIndex + ')')
+                            .find('td:eq(' + (colIndex - 1) + ')')[0];
+                    $(cell).text(value);
+                    $(cell).caret('pos', caret_pos);  // restore caret position
+                    cellValue = cellValue_old;  // restore original unedited value
+                                                // for comparison when saving in blur
+                }
             }
         });
 

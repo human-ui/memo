@@ -1,12 +1,14 @@
-import os, datetime, json, pprint, pickle, base64, subprocess, argparse
+import os, datetime, json, pprint, pickle, base64, subprocess, argparse, copy
 
 import numpy as np
 import pandas
 
 import flask
 from flask import Flask, request, jsonify, render_template
-from flask_socketio import SocketIO
-import pyinotify
+import flask_socketio
+
+import watchdog.observers
+import watchdog.events
 
 # from bokeh.client import pull_session
 # from bokeh.embed import server_session
@@ -21,8 +23,8 @@ import bokeh.resources
 
 
 MEMO_PATH = os.environ['MEMO']
-# '/braintree/data2/active/users/qbilius/memo/'
 NRECS = 30  # how many records to display when not filtered
+CURRENT_REC_MAX_IDX = None  # stores the last index of the added folder
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-p', '--port', default='5000', type=int)
@@ -30,8 +32,7 @@ args = parser.parse_args()
 
 app = Flask(__name__)
 pandas.set_option('display.max_colwidth', -1)
-socketio = SocketIO(app)
-thread = None
+socketio = flask_socketio.SocketIO(app)
 
 
 class Plot(object):
@@ -122,7 +123,7 @@ class Plot(object):
             self.xaxis = 'epoch'
 
         if len(df) > 0:
-            sel = df.value.apply(lambda x: isinstance(x, bytes))
+            sel = df['value'].apply(lambda x: isinstance(x, bytes))
             sdf = df[~sel]
             sdf.value = sdf.value.astype(float)
             if 'group' in df:
@@ -298,6 +299,7 @@ def index():
 
 
 def get_table(nrecs=None):
+    global CURRENT_REC_MAX_IDX
     df = []
     for folder in sorted(os.listdir(os.environ['MEMO'])):
         meta_path = os.environ['MEMO'] + f'{folder}/meta.json'
@@ -313,7 +315,8 @@ def get_table(nrecs=None):
     nrecs = len(df) if nrecs is None else nrecs
     df = df[:nrecs]
     if len(df) < nrecs:
-        df_old = pandas.read_csv('index.csv', index_col=0, na_values='NaN', keep_default_na=False)
+        df_old = pandas.read_csv('index.csv', index_col=0,
+                                 na_values='NaN', keep_default_na=False)
         df_old = df_old[df_old.show].drop('show', 1)
         df_old = df_old.rename(columns={'command': 'args'})
         df_old = df_old[::-1]
@@ -324,6 +327,8 @@ def get_table(nrecs=None):
     df = df.set_index('id')
     # df = df[['script', 'slurm', 'args', 'tag', 'description', 'outcome']]
     df = df[['script', 'script args', 'tag', 'description', 'outcome']]
+    # import ipdb; ipdb.set_trace()
+    CURRENT_REC_MAX_IDX = df.index[0]
     return df
 
 
@@ -331,8 +336,8 @@ def format_table(table, return_rows=False):
     table = table.to_html(index_names=False)
     table = table.replace('border="1" class="dataframe"', 'class="table"')
     if return_rows:
-        start = table.find('<tbody>\n') + 9
-        end = table.find('</tbody>')
+        start = table.find('<tbody>\n') + 9 + 3
+        end = table.find('</tbody>') - 4
         table = table[start:end]
     return table
 
@@ -445,20 +450,26 @@ def render_file(id_, filename):
     return data
 
 
-class EventHandler(pyinotify.ProcessEvent):
+class Handler(watchdog.events.FileSystemEventHandler):
 
-    def process_IN_CREATE(self, event):
-        if os.path.isdir(event.pathname):
-            df = format_table(get_table(nrecs=30), return_rows=True)
-            socketio.emit('folder updated', df)
+    def on_created(self, event):
+        if event.is_directory:
+            idx = copy.copy(CURRENT_REC_MAX_IDX)
+            df = get_table(nrecs=NRECS)
+            if idx is not None:
+                iloc = df.index.get_loc(idx)
+            else:
+                iloc = -1
+            df = format_table(df[:iloc], return_rows=True)
+            socketio.emit('folder updated', [df, event.src_path])
 
 
 @socketio.on('connect')
 def socket_connect():
-    wm = pyinotify.WatchManager()
-    notifier = pyinotify.ThreadedNotifier(wm, EventHandler())
-    notifier.start()
-    wm.add_watch(os.environ['MEMO'], pyinotify.IN_CREATE)
+    event_handler = Handler()
+    observer = watchdog.observers.Observer()
+    observer.schedule(event_handler, os.environ['MEMO'], recursive=False)
+    observer.start()
 
 
 if __name__ == '__main__':
