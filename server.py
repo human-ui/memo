@@ -22,6 +22,7 @@ import bokeh.resources
 
 MEMO_PATH = os.environ['MEMO']
 # '/braintree/data2/active/users/qbilius/memo/'
+NRECS = 30  # how many records to display when not filtered
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-p', '--port', default='5000', type=int)
@@ -287,7 +288,7 @@ class Plot(object):
 
 @app.route('/', methods=['GET'])
 def index():
-    df = get_table(nrecs=30)
+    df = get_table(nrecs=NRECS)
     table = format_table(df)
     template = render_template('index.html',
                                table=table,
@@ -339,7 +340,8 @@ def format_table(table, return_rows=False):
 @app.route('/search', methods=['POST'])
 def search():
     search_term = json.loads(request.form['data'])
-    df = get_table()
+    nrecs = NRECS if search_term == '' else None
+    df = get_table(nrecs=nrecs)
     df = df[df.apply(lambda col: col.astype(str).str.contains(search_term)).any(axis=1).values]
     rows = format_table(df, return_rows=True)
     return rows
