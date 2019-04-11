@@ -40,7 +40,7 @@
         var curIdx = 0;
         var curFile = '';
         var selectionTimeout = null;
-        var lastFolderPath = '';
+        var lastRecID = '';
 
          // warn about unsaved changes
         $(window).on('beforeunload', function(){
@@ -122,6 +122,10 @@
                     function(data) {
                         if (data == 'ok') {
                             row.remove();
+                            if (lastRecID == idx) {
+                                lastRecID = row.next().find('div.id').text();
+                                console.log(lastRecID);
+                            };
                             $('#notification').attr("class", "success");
                             $('#notification').text(idx + ' removed successfully')
                                 .fadeIn()
@@ -234,14 +238,14 @@
         }
 
         var socket = io.connect('http://' + document.domain + ':' + location.port);
-        socket.on('connect', function() {
-            socket.emit('my event', {data: 'I\'m connected!'});
-        });
+        // socket.on('connect', function() {
+        //     socket.emit('my event', {data: 'I\'m connected!'});
+        // });
         socket.on('folder updated', function(data) {
             // watchdog is emitting same events multiple times
             // so we must account for that
-            if (data[1] != lastFolderPath) {
-                lastFolderPath = data[1]
+            if (data[1] != lastRecID) {
+                lastRecID = data[1]
 
                 var focused = document.activeElement;
                 if (focused.tagName == 'TD') {

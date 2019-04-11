@@ -25,6 +25,7 @@ import bokeh.resources
 MEMO_PATH = os.environ['MEMO']
 NRECS = 30  # how many records to display when not filtered
 CURRENT_REC_MAX_IDX = None  # stores the last index of the added folder
+FILTER_COLUMNS = ['script', 'script args', 'tag', 'description', 'outcome']
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-p', '--port', default='5000', type=int)
@@ -298,38 +299,48 @@ def index():
     return template
 
 
-def get_table(nrecs=None):
+def get_table(nrecs=None, filter_columns=True):
     global CURRENT_REC_MAX_IDX
     df = []
     for folder in sorted(os.listdir(os.environ['MEMO'])):
-        meta_path = os.environ['MEMO'] + f'{folder}/meta.json'
-        if os.path.isfile(meta_path):
-            data = json.load(open(meta_path))
-            key = 'args' if 'args' in data else 'script args'
-            data['script args'] = ' '.join(data[key])
-            data['script'] = data.get('script', '')
-            data['id'] = folder
+        data = _read_rec(folder)
+        if data is not None:
             df.append(data)
     df = pandas.DataFrame(df)
     df = df[::-1]
     nrecs = len(df) if nrecs is None else nrecs
     df = df[:nrecs]
-    if len(df) < nrecs:
-        df_old = pandas.read_csv('index.csv', index_col=0,
-                                 na_values='NaN', keep_default_na=False)
-        df_old = df_old[df_old.show].drop('show', 1)
-        df_old = df_old.rename(columns={'command': 'args'})
-        df_old = df_old[::-1]
-        df_old = df_old[:nrecs - len(df)]
-        df_old['id'] = df_old.index
-        df = pandas.concat([df, df_old], ignore_index=True)
+    # if len(df) < nrecs:
+    #     df_old = pandas.read_csv('index.csv', index_col=0,
+    #                              na_values='NaN', keep_default_na=False)
+    #     df_old = df_old[df_old.show].drop('show', 1)
+    #     df_old = df_old.rename(columns={'command': 'args'})
+    #     df_old = df_old[::-1]
+    #     df_old = df_old[:nrecs - len(df)]
+    #     df_old['id'] = df_old.index
+    #     df = pandas.concat([df, df_old], ignore_index=True)
 
     df = df.set_index('id')
-    # df = df[['script', 'slurm', 'args', 'tag', 'description', 'outcome']]
-    df = df[['script', 'script args', 'tag', 'description', 'outcome']]
-    # import ipdb; ipdb.set_trace()
+    if filter_columns:
+        df = df[FILTER_COLUMNS]
     CURRENT_REC_MAX_IDX = df.index[0]
     return df
+
+
+def _read_rec(folder):
+    meta_path = os.environ['MEMO'] + f'{folder}/meta.json'
+    if os.path.isfile(meta_path):
+        data = json.load(open(meta_path))
+        key = 'args' if 'args' in data else 'script args'
+        if key in data:
+            data['script args'] = ' '.join(data[key])
+        else:
+            data['script args'] = data['full_command']
+        data['script'] = data.get('script', '')
+        data['id'] = folder
+    else:
+        data = None
+    return data
 
 
 def format_table(table, return_rows=False):
@@ -346,8 +357,11 @@ def format_table(table, return_rows=False):
 def search():
     search_term = json.loads(request.form['data'])
     nrecs = NRECS if search_term == '' else None
-    df = get_table(nrecs=nrecs)
-    df = df[df.apply(lambda col: col.astype(str).str.contains(search_term)).any(axis=1).values]
+    df = get_table(nrecs=nrecs, filter_columns=False)
+    dfi = df.reset_index()
+    dfi = dfi[dfi.apply(lambda col: col.astype(str).str.contains(search_term)).any(axis=1).values]
+    df = dfi.set_index('id')
+    df = df[FILTER_COLUMNS]
     rows = format_table(df, return_rows=True)
     return rows
 
@@ -372,10 +386,8 @@ def confirm_edit():
 def remove_rows():
     id_ = json.loads(request.form['data'])
     try:
-        # import ipdb; ipdb.set_trace()
         os.rename(os.path.join(MEMO_PATH, id_),
                   os.path.abspath(os.path.join(MEMO_PATH, '..', 'memo-trash', id_)))
-        # subprocess.run(['trash-put', os.path.join(MEMO_PATH, id_)], check=True)
     except:
         return 'Could not remove this entry.'
     else:
@@ -454,22 +466,30 @@ class Handler(watchdog.events.FileSystemEventHandler):
 
     def on_created(self, event):
         if event.is_directory:
-            idx = copy.copy(CURRENT_REC_MAX_IDX)
-            df = get_table(nrecs=NRECS)
-            if idx is not None:
-                iloc = df.index.get_loc(idx)
-            else:
-                iloc = -1
-            df = format_table(df[:iloc], return_rows=True)
-            socketio.emit('folder updated', [df, event.src_path])
+            # idx = copy.copy(CURRENT_REC_MAX_IDX)
+            rec_id = os.path.basename(event.src_path)
+            data = _read_rec(rec_id)
+            if data is not None:
+                df = pandas.DataFrame([data])
+                df = df.set_index('id')
+                df = df[['script', 'script args', 'tag', 'description', 'outcome']]
+                df = format_table(df, return_rows=True)
+            # df = get_table(nrecs=NRECS)
+            # if idx is not None:
+            #     iloc = df.index.get_loc(idx)
+            # else:
+            #     iloc = -1
+            # df = format_table(df[:iloc], return_rows=True)
+                socketio.emit('folder updated', [df, rec_id])
 
 
-@socketio.on('connect')
-def socket_connect():
-    event_handler = Handler()
-    observer = watchdog.observers.Observer()
-    observer.schedule(event_handler, os.environ['MEMO'], recursive=False)
-    observer.start()
+# @socketio.on('connect')
+# def socket_connect():
+event_handler = Handler()
+observer = watchdog.observers.Observer()
+observer.schedule(event_handler, os.environ['MEMO'], recursive=False)
+
+observer.start()
 
 
 if __name__ == '__main__':

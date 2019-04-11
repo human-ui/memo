@@ -12,7 +12,6 @@ import subprocess
 import tempfile
 import time
 
-
 DATA_DIR = os.environ['MEMO']
 CONFIG = configparser.ConfigParser()
 CONFIG.read(os.path.expanduser('~/.memo'))
@@ -45,7 +44,7 @@ def get_host_properties():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.connect(("8.8.8.8", 80))
     ip = s.getsockname()[0]
-    host, cluster = IPS.get(ip, 'localhost')
+    host, cluster = IPS.get(ip, ('localhost', os.uname().nodename))
     s.close()
     if cluster == 'braintree':
         node = ''.join(host.split('.')[0].split('-')[1:3])
@@ -54,7 +53,7 @@ def get_host_properties():
     return host, cluster, node
 
 
-def exec_remote(command, user, host):
+def exec_remote(command, user, host, wait=True):
     """
     Execute a command on a remote server and return stdout output
     """
@@ -88,11 +87,18 @@ def watch_and_sync(local_memo_dir, sleep=5):
     db_memo_dir = os.path.join(db_memo, memo_id)
     last_update = 0
     while True:
-        this_update = os.path.getmtime(local_memo_dir)
-        if this_update > last_update:
-            last_update = this_update 
-            sync(local_memo_dir, db_memo_dir)
-        time.sleep(sleep)
+        time.sleep(5)
+        done = False
+        for dirpath, dirnames, filenames in os.walk(local_memo_dir):
+            for filename in filenames:
+                this_update = os.path.getmtime(os.path.join(dirpath, filename))
+                if this_update > last_update:
+                    last_update = this_update
+                    sync(local_memo_dir, db_memo_dir)
+                    done = True
+                    break
+            if done:
+                break
 
 
 def sync(src, dst):
@@ -142,11 +148,11 @@ class Local(object):
 
         local_host = get_host_properties()[0]
         if local_host == self.host:
-            self.memo_dir = tempfile.mkdtemp()
+            self.memo_dir = tempfile.mkdtemp() + os.path.sep
         else:
             command = 'python -c '+ "'import tempfile; print(tempfile.mkdtemp())'"
             out = self.exec_remote(command)                
-            self.memo_dir = out.split('\n')[-2]
+            self.memo_dir = out.split('\n')[-2] + os.path.sep
         print('memo id:', self.memo_id)
 
     def parser(self, args):
@@ -319,7 +325,7 @@ def main():
         args.cluster = cluster
         args.node = node
 
-    cluster = CLUSTERS[args.cluster]
+    cluster = CLUSTERS.get(args.cluster, Local)
     if args.cluster == 'braintree':
         cluster = cluster(node=args.node)
     else:
@@ -330,10 +336,10 @@ def main():
     script_args = cluster.parser(extra_args)
 
     # Form call command
-    if os.path.basename(args.executable) == 'python':
-        ex = sys.executable
-    else:
-        ex = args.executable
+    # if os.path.basename(args.executable) == 'python':
+    #     ex = sys.executable
+    # else:
+    ex = args.executable
     script_args_str = ' '.join(script_args)
 
     # Add memo_id to the command for easy tracking
@@ -378,8 +384,8 @@ def main():
         shutil.copy2(sys.argv[2], local_memo_dir)
         with open(os.path.join(local_memo_dir, 'run.sh'), 'w') as f:
             f.write('\n'.join(script))
-        meta_file = open(os.path.join(local_memo_dir, 'meta.json'), 'w')
-        json.dump(rec, meta_file, indent=4)
+        with open(os.path.join(local_memo_dir, 'meta.json'), 'w') as meta_file:
+            json.dump(rec, meta_file, indent=4)
 
         if remote:                 
             copy_files = ['rsync', '-aq',
@@ -394,8 +400,8 @@ def main():
         bash_cmd = f'cd {working_dir}; ' + ' '.join(call_args)
         if not args.dry:
             out = cluster.exec_remote(bash_cmd)        
-            if args.cluster == 'om':  # print job id
-                print(out.rstrip('\n'))
+            # if args.cluster == 'om':  # print job id
+            print(out.rstrip('\n'))
 
     else:
         local_memo_dir = os.path.expandvars(local_memo_dir)
