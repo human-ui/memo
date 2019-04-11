@@ -9,6 +9,8 @@ Current limitation: only the file you execute gets saved. Thus, if your file has
 
 No dependencies outside the standard Python 3 libraries.
 
+The database (which is just a plain folder) is expected to be on `braintree.mit.edu` but can be modified freely in the config file.
+
 ### Environment variables
 
 You need to create a new environment variable `MEMO` that points to a folder where you will store your runs.
