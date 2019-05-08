@@ -154,14 +154,23 @@ class Local(object):
             out = self.exec_remote(command)                
             self.memo_dir = out.split('\n')[-2] + os.path.sep
         print('memo id:', self.memo_id)
+        self.project_path = os.path.abspath(os.getcwd())
 
     def parser(self, args):
         return args
 
-    def gen_batch_script(self, command, prefix=''):
-        script = ['#!/bin/sh',
-                  prefix,  
+    def gen_batch_script(self, command, prefix=None):
+        script = '#!/bin/sh'
+        if prefix is not None:
+            if not isinstance(prefix, (tuple, list)):
+                script = [script, prefix]
+            else:
+                script = [script] + list(prefix)
+        else:
+            script = [script]
+        script += ['',
                   f'export MEMO_DIR={self.memo_dir}',
+                  f'export PROJECT_PATH={self.project_path}',
                   f'nohup memo watch_and_sync {self.memo_dir} -- --memo_id {self.memo_id} &',
                   'WATCH_PID=$!',
                   command,
@@ -209,7 +218,7 @@ class OpenMind(Local):
         return script_args
 
     def gen_batch_script(self, command):
-        script = []
+        prefix = []
         for k, v in self.args.__dict__.items():
             key = k.replace('_', '-')
             key = f'-{key}' if len(key) == 1 else f'--{key}'
@@ -222,33 +231,31 @@ class OpenMind(Local):
                     v = f'gpu:{v}'
 
             skip = False
-            if key == 'qos':
+            if k == 'qos':
                 if v:
                     v = CONFIG['om']['qos']
                 else:
                     skip = True
-            elif key == 'jobname' and v is None:
+            elif k == 'jobname' and v is None:
+                skip = True
+            elif k == 'singularity':
                 skip = True
 
             if not skip:
-                script.append(f'#SBATCH {key}={v}')
+                prefix.append(f'#SBATCH {key}={v}')
 
-        script.append('')
-        script.append(f'export MEMO_DIR={self.memo_dir}')
         if self.args.singularity:
-            script.append(f'singularity exec --bind /braintree:/braintree '
-                          f'--bind /home:/home --bind /om:/om --nv '
-                          f'docker://nvidia/cuda:9.0-cudnn7-runtime-centos7 '
-                          f'{command}')
-        else:
-            script.append(command)
-        return script
+            command = (f'singularity exec --bind /braintree:/braintree '
+                        f'--bind /home:/home --bind /om:/om --nv '
+                        f'docker://nvidia/cuda:9.0-cudnn7-runtime-centos7 '
+                        f'{command}')
+        return super().gen_batch_script(command, prefix=prefix)
 
 
 class VSC(Local):
 
     cluster = 'vsc'
-    host = 'login1-tier2.hpc.kuleuven.be',
+    host = 'login1-tier2.hpc.kuleuven.be'
     executor = 'qsub'
 
     def __init__(self):
@@ -297,14 +304,8 @@ class VSC(Local):
         pbs.append('-l ' + ",".join(l_list))
         pbs = ' '.join(pbs)
 
-        script = []
-        script.append(f'#PBS {pbs}')
-        script.append('')
-        script.append(f'export MEMO_DIR={self.memo_dir}')
-        script.append('cd $MEMO_DIR')
-        script.append('')
-        script.append(command)
-        return script
+        return super().gen_batch_script(command, #f'cd $MEMO_DIR; {command}',
+                                        prefix=f'#PBS {pbs}')
 
 
 def main():
@@ -386,7 +387,6 @@ def main():
             f.write('\n'.join(script))
         with open(os.path.join(local_memo_dir, 'meta.json'), 'w') as meta_file:
             json.dump(rec, meta_file, indent=4)
-
         if remote:                 
             copy_files = ['rsync', '-aq',
                           f'{local_memo_dir}/',
@@ -409,7 +409,7 @@ def main():
         if not args.follow:
             logfile = os.path.join(local_memo_dir, 'log.out')
             subprocess.Popen(['nohup'] + call_args, cwd=working_dir,
-                             stdin=open('/dev/null', 'w'),
+                             stdin=subprocess.DEVNULL,
                              stdout=open(logfile, 'a'),
                              stderr=open(logfile, 'a'))
             time.sleep(1)
