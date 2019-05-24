@@ -1,16 +1,8 @@
 #!/usr/bin/env python
-import os
-import sys
-import argparse
-import configparser
-import datetime
-import getpass
-import json
-import shutil
-import socket
-import subprocess
-import tempfile
-import time
+import os, sys, argparse, configparser, datetime, getpass, json, shutil
+import socket, subprocess, tempfile, time, importlib
+
+import findimports
 
 DATA_DIR = os.environ['MEMO']
 CONFIG = configparser.ConfigParser()
@@ -47,10 +39,29 @@ def get_host_properties():
     host, cluster = IPS.get(ip, ('localhost', os.uname().nodename))
     s.close()
     if cluster == 'braintree':
-        node = ''.join(host.split('.')[0].split('-')[1:3])
+        if 'gpu' in host:
+            node_id = host.split(".")[0].split("-")[-1]
+            node = f'gpu{node_id}'
+        else:
+            node = 'cpu'
     else:
         node = None
     return host, cluster, node
+
+
+def get_local_dependencies(filepath):
+    modules = findimports.find_imports(filepath)
+    dependencies = []
+    for module in modules:
+        spec = importlib.util.find_spec(module.name)
+        try:
+            f = importlib.util.module_from_spec(spec).__file__
+        except:
+            pass
+        else:
+            if os.path.dirname(f) == os.path.abspath(os.getcwd()):
+                dependencies.append(f)
+    return dependencies
 
 
 def exec_remote(command, user, host, wait=True):
@@ -336,6 +347,9 @@ def main():
     # Parse host-specific arguments
     script_args = cluster.parser(extra_args)
 
+    # get local dependencies
+    dependencies = get_local_dependencies(args.script)
+
     # Form call command
     # if os.path.basename(args.executable) == 'python':
     #     ex = sys.executable
@@ -383,6 +397,8 @@ def main():
         print(local_memo_dir)
 
         shutil.copy2(sys.argv[2], local_memo_dir)
+        for dep in dependencies:
+            shutil.copy2(dep, local_memo_dir)
         with open(os.path.join(local_memo_dir, 'run.sh'), 'w') as f:
             f.write('\n'.join(script))
         with open(os.path.join(local_memo_dir, 'meta.json'), 'w') as meta_file:
