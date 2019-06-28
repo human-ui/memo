@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-import os, sys, argparse, configparser, datetime, getpass, json, shutil
+import os, sys, argparse, configparser, datetime, getpass, json, shutil, glob
 import socket, subprocess, tempfile, time, importlib
 
-import findimports
+# import findimports
 
 DATA_DIR = os.environ['MEMO']
 CONFIG = configparser.ConfigParser()
@@ -50,17 +50,28 @@ def get_host_properties():
 
 
 def get_local_dependencies(filepath):
-    modules = findimports.find_imports(filepath)
+    root = os.path.abspath(os.getcwd())
     dependencies = []
-    for module in modules:
-        spec = importlib.util.find_spec(module.name)
+    modules = [m.name for m in findimports.find_imports(filepath)]
+    breakpoint()
+    while len(modules) > 0:
+        module = modules.pop(0)
+        spl = module.split('.')
+        if len(spl) > 0:
+            path = ''
+            for m in spl[:-1]:
+                j = '.'.join([path, m])
+                modules.append(j)
+                path = j
         try:
+            spec = importlib.util.find_spec(module)
             f = importlib.util.module_from_spec(spec).__file__
         except:
             pass
         else:
-            if os.path.dirname(f) == os.path.abspath(os.getcwd()):
+            if f.startswith(root) and f not in dependencies:
                 dependencies.append(f)
+                modules.extend([m.name for m in findimports.find_imports(f)])
     return dependencies
 
 
@@ -146,7 +157,7 @@ class Local(object):
     host = 'localhost'
     executor = 'sh'
 
-    def __init__(self):
+    def __init__(self, tmp_dir=None):
         if self.cluster == 'localhost':
             self.user = getpass.getuser()
         else:
@@ -161,7 +172,7 @@ class Local(object):
         if local_host == self.host:
             self.memo_dir = tempfile.mkdtemp() + os.path.sep
         else:
-            command = 'python -c '+ "'import tempfile; print(tempfile.mkdtemp())'"
+            command = 'echo $(python -c "import tempfile; print(tempfile.mkdtemp(dir=' f"'{tmp_dir}'))" '")'
             out = self.exec_remote(command)                
             self.memo_dir = out.split('\n')[-2] + os.path.sep
         print('memo id:', self.memo_id)
@@ -270,18 +281,23 @@ class VSC(Local):
     executor = 'qsub'
 
     def __init__(self):
-        super().__init__()
+        # /tmp is not shared in the cluster so we need a user-level folder
+        user = CONFIG[self.cluster]['user']
+        # cannot get VSC_SCRATCH using ssh, so need a different hacky method
+        # tmp_dir = get_remote_env_var('VSC_SCRATCH', user, self.host)
+        tmp_dir = f'/scratch/leuven/{user[3:6]}/{user}'
+        super().__init__(tmp_dir=tmp_dir)
  
     def parser(self, args):
         parser = argparse.ArgumentParser()
         parser.add_argument('--time', default='4:00:00:00')
         parser.add_argument('--nodes', default=1, type=int)
-        parser.add_argument('--pmem', default='40gb')
+        parser.add_argument('--pmem', default=None) #'5gb'
         parser.add_argument('--pvmem', default=None)
         parser.add_argument('--gpus', default=1, type=int)
         # parser.add_argument('--qos', default='q72h')
         parser.add_argument('-N', '--job_name', default=None)
-        parser.add_argument('-A', '--project_name', default='default_project')
+        parser.add_argument('-A', '--project_name', CONFIG['vsc']['project_name'])
         self.args, script_args = parser.parse_known_args(args)
         return script_args
 
@@ -310,13 +326,16 @@ class VSC(Local):
             if option is not None and v is not None:
                 pbs.append(option)
 
-        l_list += [f'nodes={nodes}:ppn={9 * gpus}:gpus={gpus}',
-                   'partition=gpu']
+        if gpus != 0 and gpus is not None:
+            l_list += [f'nodes={nodes}:ppn={9 * gpus}:gpus={gpus}',
+                       'partition=gpu']
         pbs.append('-l ' + ",".join(l_list))
+        pbs.append(f'-o {self.memo_dir}/log.out')
+        pbs.append(f'-e {self.memo_dir}/log.err')
         pbs = ' '.join(pbs)
 
-        return super().gen_batch_script(command, #f'cd $MEMO_DIR; {command}',
-                                        prefix=f'#PBS {pbs}')
+        return super().gen_batch_script(command,
+                                        prefix=(f'#PBS {pbs}', f'cd {self.memo_dir}'))
 
 
 def main():
@@ -348,7 +367,7 @@ def main():
     script_args = cluster.parser(extra_args)
 
     # get local dependencies
-    dependencies = get_local_dependencies(args.script)
+    dependencies = glob.glob(os.path.join(os.getcwd(), '*.py')) #get_local_dependencies(args.script)
 
     # Form call command
     # if os.path.basename(args.executable) == 'python':
@@ -394,7 +413,7 @@ def main():
             local_memo_dir = tempfile.mkdtemp()
         else:  # local folder is already available
             local_memo_dir = cluster.memo_dir
-        print(local_memo_dir)
+        print('Local memo dir:', local_memo_dir)
 
         shutil.copy2(sys.argv[2], local_memo_dir)
         for dep in dependencies:
@@ -407,6 +426,7 @@ def main():
             copy_files = ['rsync', '-aq',
                           f'{local_memo_dir}/',
                           f'{login}:{cluster.memo_dir}']
+            print('Remote memo dir:', cluster.memo_dir)
             out = subprocess.run(' '.join(copy_files), shell=True, check=True)
 
     # Call run.sh
@@ -444,11 +464,11 @@ CLUSTERS = {'local': Local,
             'vsc': VSC}
 
 IPS = {
-    '18.93.6.23': ('braintree-cpu-1.mit.edu', 'braintree'),
-    '18.93.6.11': ('braintree-gpu-1.mit.edu', 'braintree'),
-    '18.93.6.12': ('braintree-gpu-2.mit.edu', 'braintree'),
-    '18.93.5.253': ('braintree-gpu-3.mit.edu', 'braintree'),
-    '18.93.6.27': ('braintree-gpu-4.mit.edu', 'braintree'),
+    '18.18.93.36': ('braintree-cpu-1.mit.edu', 'braintree'),
+    '18.18.93.39': ('braintree-gpu-1.mit.edu', 'braintree'),
+    '18.18.93.40': ('braintree-gpu-2.mit.edu', 'braintree'),
+    '18.18.93.37': ('braintree-gpu-3.mit.edu', 'braintree'),
+    '18.18.93.38': ('braintree-gpu-4.mit.edu', 'braintree'),
     '18.13.53.52': ('openmind7.mit.edu', 'om'),
     '10.118.230.3': ('login1-tier2.hpc.kuleuven.be', 'vsc')
 }
