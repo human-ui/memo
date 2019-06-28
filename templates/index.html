@@ -274,6 +274,31 @@
             }
         });
 
+        function SelectText(element) {
+            var doc = document;
+            var text = doc.getElementById(element);
+            console.log(text);
+            var range, selection;
+            if (doc.body.createTextRange) {
+                range = document.body.createTextRange();
+                range.moveToElementText(text);
+                range.select();
+            } else if (window.getSelection) {
+                selection = window.getSelection();        
+                range = document.createRange();
+                range.selectNodeContents(text);
+                selection.removeAllRanges();
+                selection.addRange(range);
+            }
+        }
+
+        $(function() {
+            $('#popcontent').on('click', '#select-this', function() {
+                console.log('ok6');
+                SelectText('select-this');
+            });
+        });
+
     </script>
 </body>
 </html>
