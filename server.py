@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import os, datetime, json, pprint, pickle, base64, subprocess, argparse, copy
 
 import numpy as np
@@ -299,6 +300,40 @@ def index():
     return template
 
 
+@app.route('/memo/<id_>/<path>', methods=['GET'])
+def all_routes(id_, path):
+    # import ipdb; ipdb.set_trace()
+    # ext = os.path.splitext(path)[-1][1:].lower()
+    # data = open(os.path.join(os.environ['MEMO'], id_, path)).read()
+    return flask.send_file(os.path.join(os.environ['MEMO'], id_, path))
+    # data = open(fullpath).read()
+    # if ext == 'html':
+    #     with open(os.path.join(os.environ['MEMO'], path)) as f:
+    #         data = f.read()
+    # if ext in ['png', 'jpg', 'jpeg', 'tif', 'tiff', 'bmp']:
+    #     # data = flask.make_response(open(path).read())
+    #     data = flask.make_response(data)
+    #     data.content_type = f'image/{ext}'
+    #     # with open(path, 'rb') as f:
+    #     #     data = base64.b64encode(f.read()).decode('ascii')
+    #     # data = f'<img src="data:image/{ext};base64,{data}"/>'
+    # return data
+
+
+# def all_routes(path):
+#     with open(os.path.join(os.environ['MEMO'], path)) as f:
+#         data = f.read()
+#     return data
+
+
+@app.route('/memo/<id_>/images/<path>', methods=['GET'])
+def all_routes2(id_, path):
+    # import ipdb; ipdb.set_trace()
+    # ext = os.path.splitext(path)[-1][1:].lower()
+    # data = open(os.path.join(os.environ['MEMO'], id_, path)).read()
+    return flask.send_file(os.path.join(os.environ['MEMO'], id_, 'images', path))
+
+
 def get_table(nrecs=None, filter_columns=True):
     global CURRENT_REC_MAX_IDX
     df = []
@@ -429,16 +464,19 @@ def click_file():
 
 
 def render_file(id_, filename):
-    ext = os.path.splitext(filename)[-1][1:]
+    ext = os.path.splitext(filename)[-1][1:].lower()
     path = os.path.join(MEMO_PATH, id_, filename)
     if filename == 'results.pkl':
         pp = Plot(id_)
         script, div = components(pp.plots)
         data = script + ''.join(div.values())
-    elif ext.lower() in ['png', 'jpg', 'jpeg', 'tif', 'tiff', 'bmp']:
+    elif ext in ['png', 'jpg', 'jpeg', 'tif', 'tiff', 'bmp']:
         with open(path, 'rb') as f:
             data = base64.b64encode(f.read()).decode('ascii')
         data = f'<img src="data:image/{ext};base64,{data}"/>'
+    elif ext == 'html':
+        # import ipdb; ipdb.set_trace()
+        data = f'<iframe frameborder="0" width="600px" height="500px" src="/memo/{id_}/{filename}"></iframe>'
     else:
         if ext == 'json':
             data = json.load(open(path))
@@ -455,7 +493,7 @@ def render_file(id_, filename):
         <figure>
             <figcaption>{filename}</figcaption>
             <pre>
-                <code class="{ext}">{flask.escape(data)}</code>
+                <code class="{ext}" id="select-this">{flask.escape(data)}</code>
             </pre>
         </figure>
         """
