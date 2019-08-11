@@ -79,8 +79,8 @@ def exec_remote(command, user, host, wait=True):
     """
     Execute a command on a remote server and return stdout output
     """
-    out = subprocess.run(['ssh', f'{user}@{host}',
-                          'bash', '--login', '-c', f'"{command}"'],
+    bash_command = f"bash --login -c '{command}'"
+    out = subprocess.run(['ssh', f'{user}@{host}', bash_command],
                           stderr=subprocess.STDOUT,
                           stdout=subprocess.PIPE)
     return out.stdout.decode('ascii')
@@ -157,7 +157,9 @@ class Local(object):
     host = 'localhost'
     executor = 'sh'
 
-    def __init__(self, tmp_dir=None):
+    def __init__(self, tmp_dir=None, no_record=False):
+        self.no_record = no_record
+
         if self.cluster == 'localhost':
             self.user = getpass.getuser()
         else:
@@ -172,8 +174,15 @@ class Local(object):
         if local_host == self.host:
             self.memo_dir = tempfile.mkdtemp() + os.path.sep
         else:
-            command = 'echo $(python -c "import tempfile; print(tempfile.mkdtemp(dir=' f"'{tmp_dir}'))" '")'
-            out = self.exec_remote(command)                
+            if tmp_dir is None:
+                command = 'mktemp -d'
+                # command = 'echo $(python -c "import tempfile; print(tempfile.mkdtemp())")'
+            else:
+                command = f'mktemp -d -p {tmp_dir}'
+                # command = 'echo $(python -c "import tempfile; print(tempfile.mkdtemp(dir='
+                        #   f"'{tmp_dir}'))"
+                        #   '")'
+            out = self.exec_remote(command) 
             self.memo_dir = out.split('\n')[-2] + os.path.sep
         print('memo id:', self.memo_id)
         self.project_path = os.path.abspath(os.getcwd())
@@ -191,13 +200,16 @@ class Local(object):
         else:
             script = [script]
         script += ['',
-                  f'export MEMO_DIR={self.memo_dir}',
-                  f'export PROJECT_PATH={self.project_path}',
-                  f'nohup memo watch_and_sync {self.memo_dir} -- --memo_id {self.memo_id} &',
-                  'WATCH_PID=$!',
-                  command,
-                  'kill $WATCH_PID',
-                  f'memo on_exit {self.memo_dir}']
+                   f'export MEMO_DIR={self.memo_dir}',
+                   f'export PROJECT_PATH={self.project_path}']
+        if not self.no_record:
+            script += [f'nohup memo watch_and_sync {self.memo_dir} -- '
+                       f'--memo_id {self.memo_id} &']
+        script += ['WATCH_PID=$!',
+                   command,
+                   'kill $WATCH_PID']
+        if not self.no_record:
+            script += [f'memo on_exit {self.memo_dir}']
         return script
 
     def exec_remote(self, command):
@@ -209,14 +221,14 @@ class BrainTree(Local):
     cluster = 'braintree'
     executor = 'sh'
 
-    def __init__(self, node='cpu'):
+    def __init__(self, node='cpu', *args, **kwargs):
         if node.startswith('gpu'):
             num = node[-1]
             node = node[:-1]
         else:
             num = '1'
         self.host = f'braintree-{node}-{num}.mit.edu'
-        super().__init__()
+        super().__init__(*args, **kwargs)
 
 
 class OpenMind(Local):
@@ -280,13 +292,13 @@ class VSC(Local):
     host = 'login1-tier2.hpc.kuleuven.be'
     executor = 'qsub'
 
-    def __init__(self):
+    def __init__(self, tmp_dir=None, *args, **kwargs):
         # /tmp is not shared in the cluster so we need a user-level folder
         user = CONFIG[self.cluster]['user']
         # cannot get VSC_SCRATCH using ssh, so need a different hacky method
         # tmp_dir = get_remote_env_var('VSC_SCRATCH', user, self.host)
         tmp_dir = f'/scratch/leuven/{user[3:6]}/{user}'
-        super().__init__(tmp_dir=tmp_dir)
+        super().__init__(tmp_dir=tmp_dir, *args, **kwargs)
  
     def parser(self, args):
         parser = argparse.ArgumentParser()
@@ -297,7 +309,7 @@ class VSC(Local):
         parser.add_argument('--gpus', default=1, type=int)
         # parser.add_argument('--qos', default='q72h')
         parser.add_argument('-N', '--job_name', default=None)
-        parser.add_argument('-A', '--project_name', CONFIG['vsc']['project_name'])
+        parser.add_argument('-A', '--project_name', default=CONFIG['vsc']['project_name'])
         self.args, script_args = parser.parse_known_args(args)
         return script_args
 
@@ -338,17 +350,27 @@ class VSC(Local):
                                         prefix=(f'#PBS {pbs}', f'cd {self.memo_dir}'))
 
 
+class Enuui(Local):
+
+    cluster = 'enuui'
+    host = '10.43.201.11'
+    executor = 'sh'
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('executable')
     parser.add_argument('script')
     parser.add_argument('-t', '--tag', default='')
     parser.add_argument('-d', '--description', default='')
-    parser.add_argument('--cluster', choices=['local', 'braintree', 'om', 'vsc'])
+    parser.add_argument('--cluster', choices=list(CLUSTERS.keys()))
     parser.add_argument('--node', default='gpu3')
     parser.add_argument('--keep_cwd', action='store_true', default=False)
     parser.add_argument('--follow', action='store_true', default=False)
     parser.add_argument('--dry', action='store_true', default=False)
+    parser.add_argument('--no_record', action='store_true', default=False,
+                        help='Choose if you do not want to store any record in the'
+                             'database. Useful for debugging.')
 
     args, extra_args = parser.parse_known_args()    
     local_host, cluster, node = get_host_properties()  
@@ -358,9 +380,9 @@ def main():
 
     cluster = CLUSTERS.get(args.cluster, Local)
     if args.cluster == 'braintree':
-        cluster = cluster(node=args.node)
+        cluster = cluster(node=args.node, no_record=args.no_record)
     else:
-        cluster = cluster()
+        cluster = cluster(no_record=args.no_record)
     remote = local_host != cluster.host
 
     # Parse host-specific arguments
@@ -461,7 +483,8 @@ def main():
 CLUSTERS = {'local': Local,
             'braintree': BrainTree,
             'om': OpenMind,
-            'vsc': VSC}
+            'vsc': VSC,
+            'enuui': Enuui}
 
 IPS = {
     '18.18.93.36': ('braintree-cpu-1.mit.edu', 'braintree'),
@@ -470,7 +493,8 @@ IPS = {
     '18.18.93.37': ('braintree-gpu-3.mit.edu', 'braintree'),
     '18.18.93.38': ('braintree-gpu-4.mit.edu', 'braintree'),
     '18.13.53.52': ('openmind7.mit.edu', 'om'),
-    '10.118.230.3': ('login1-tier2.hpc.kuleuven.be', 'vsc')
+    '10.118.230.3': ('login.hpc.kuleuven.be', 'vsc'),
+    '10.43.201.11': ('10.43.201.11', 'enuui')
 }
 
 
