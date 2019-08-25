@@ -1,0 +1,17 @@
+# Run: 
+# > conda env create
+# > conda env update
+
+name: memo-server
+channels:
+  - default
+dependencies:
+  - python=3.7
+  - numpy
+  - pandas
+  - flask
+  - flask-socketio
+  - bokeh
+  - pip
+  - pip:
+    - watchdog
