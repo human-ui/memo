@@ -363,7 +363,7 @@ def get_table(nrecs=None, filter_columns=True):
 
 
 def _read_rec(folder):
-    meta_path = os.environ['MEMO'] + f'{folder}/meta.json'
+    meta_path = os.path.join(os.environ['MEMO'], folder, 'meta.json')
     if os.path.isfile(meta_path):
         data = json.load(open(meta_path))
         key = 'args' if 'args' in data else 'script args'
