@@ -32,6 +32,51 @@ user = ...
 qos = dicarlo
 ```
 
+### Installation steps
+
+#### Clone
+
+```
+git clone https://github.com/human-ui/memo.git ~/memo
+```
+
+#### Create DB directory
+
+```
+mkdir ~/memo/store
+```
+
+#### Set env `MEMO`
+
+```
+echo export MEMO="$HOME/memo/store" >> .profile
+```
+
+#### Add `memo` bin to path
+
+```
+mkdir ~/bin
+ln -s ~/memo/memo.py ~/bin/memo
+```
+
+#### Create config file
+
+Minimal `~/.memo` config file pointing to localhost:
+```
+cat << EOT > ~/.memo
+[db]
+user = $USER
+host = localhost
+EOT
+```
+
+#### Allow ssh localhost without password
+
+```
+cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
+```
+
+
 ## Usage
 
 `memo <your command as usual>`
