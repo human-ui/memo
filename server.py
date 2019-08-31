@@ -422,9 +422,10 @@ def remove_rows():
     id_ = json.loads(request.form['data'])
     try:
         os.rename(os.path.join(MEMO_PATH, id_),
-                  os.path.abspath(os.path.join(MEMO_PATH, '..', 'memo-trash', id_)))
-    except:
-        return 'Could not remove this entry.'
+                  os.path.abspath(os.path.join(MEMO_PATH, 'trash', id_)))
+    except OSError as err:
+        print(err)
+        return f'Could not remove this entry ({err})'
     else:
         return 'ok'
     # index = int(index[1:])  # first character is x

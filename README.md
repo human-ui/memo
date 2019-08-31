@@ -44,6 +44,7 @@ git clone https://github.com/human-ui/memo.git ~/memo
 
 ```
 mkdir ~/memo/store
+mkdir ~/memo/store/trash
 ```
 
 #### Set env `MEMO`
