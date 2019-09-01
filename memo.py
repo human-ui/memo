@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import os, sys, argparse, configparser, datetime, getpass, json, shutil, glob
+import os, sys, argparse, configparser, datetime, getpass, json, shutil, glob, shlex
 import socket, subprocess, tempfile, time, importlib
 
 # import findimports
@@ -396,7 +396,7 @@ def main():
     #     ex = sys.executable
     # else:
     ex = args.executable
-    script_args_str = ' '.join(script_args)
+    script_args_str = ' '.join([shlex.quote(s) for s in script_args])
 
     # Add memo_id to the command for easy tracking
     sep = ' -- ' if ' -- ' not in script_args_str else ' '
