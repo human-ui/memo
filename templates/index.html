@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <link rel="shortcut icon" id="favicon" href="{{ url_for('static', filename='favicon.png') }}"> 
     <link rel="stylesheet" href="https://unpkg.com/wingcss"/>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="stylesheet"
@@ -87,10 +88,13 @@
         $('input').on('keyup',function(event){
             if (event.key == "Enter") {
                 var searchTerm = $(this).val().toLowerCase();
+                console.log('Sent search');
                 $.post("/search",
                     { data: JSON.stringify(searchTerm) },
                     function(filtered_table) {
+                        console.log('Received search');
                         $('table tbody').html(filtered_table);
+                        console.log('Formatted table');
                         setup_table();
                     }
                 );
@@ -101,14 +105,28 @@
             var tag_col = $("th:contains('tag')").index();
             var descr_col = $("th:contains('description')").index();
             var outcome_col = $("th:contains('outcome')").index();
+            var commit_col = $("th:contains('git commit')").index();
+            var url_col = $("th:contains('github url')").index();
+            $("th:contains('git commit')").attr("style", "display:none;");
+            $("th:contains('github url')").attr("style", "display:none;");
             selector.each(function() {
                 $(this).children().eq(tag_col).attr("contenteditable", true);
                 $(this).children().eq(descr_col).attr("contenteditable", true);
                 $(this).children().eq(outcome_col).attr("contenteditable", true);
+                $(this).children().eq(commit_col).attr("style", "display:none;");
+                $(this).children().eq(url_col).attr("style", "display:none;");
+
                 $(this).children().eq(0).attr("class", "index");
                 var this_id = $(this).children().eq(0).text();
+                var this_commit = $(this).children().eq(commit_col).text();
+                var this_url = $(this).children().eq(url_col).text();
+                if ((this_url !== 'None') & (this_commit !== 'None')) {
+                    var href = this_url + '/commit/' + this_commit;
+                    this_id = '<a href="' + href + '" class="github">' + this_id + '</a>';
+                }
+                
                 $(this).children().eq(0).html('<div class="remove">x</div>' +
-                                              '<div class="id">' + this_id + '</div>');
+                    '<div class="id">' + this_id + '</div>');
             });
             return selector
         }
@@ -235,6 +253,7 @@
             $("thead tr").children().eq(outcome_col).attr("class", "outcome");
             $('td').attr("class", "td")
             format_rows($("tbody tr"));
+            console.log('Set up table');
         }
 
         var socket = io.connect('http://' + document.domain + ':' + location.port);

@@ -26,7 +26,7 @@ import bokeh.resources
 MEMO_PATH = os.environ['MEMO']
 NRECS = 30  # how many records to display when not filtered
 CURRENT_REC_MAX_IDX = None  # stores the last index of the added folder
-FILTER_COLUMNS = ['script', 'script args', 'tag', 'description', 'outcome']
+FILTER_COLUMNS = ['script', 'script args', 'tag', 'description', 'outcome', 'git commit', 'github url']
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-p', '--port', default='5000', type=int)
@@ -345,6 +345,8 @@ def get_table(nrecs=None, filter_columns=True):
     df = df[::-1]
     nrecs = len(df) if nrecs is None else nrecs
     df = df[:nrecs]
+    df['git commit'] = None
+    df['github url'] = None
     # if len(df) < nrecs:
     #     df_old = pandas.read_csv('index.csv', index_col=0,
     #                              na_values='NaN', keep_default_na=False)
@@ -393,6 +395,7 @@ def format_table(table, return_rows=False):
 
 @app.route('/search', methods=['POST'])
 def search():
+    print('Received search', datetime.datetime.now().strftime('%H:%M:%S'))
     search_term = json.loads(request.form['data'])
     nrecs = NRECS if search_term == '' else None
     df = get_table(nrecs=nrecs, filter_columns=False)
@@ -401,6 +404,7 @@ def search():
     df = dfi.set_index('id')
     df = df[FILTER_COLUMNS]
     rows = format_table(df, return_rows=True)
+    print('Sent search', datetime.datetime.now().strftime('%H:%M:%S'))
     return rows
 
 

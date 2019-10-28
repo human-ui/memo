@@ -121,3 +121,7 @@ ul#poplist {
 .selected-row {
     background-color: #bbb;
 }
+.github {
+    color: #333;
+    text-decoration: none;
+}
