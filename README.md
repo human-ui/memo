@@ -43,14 +43,14 @@ git clone https://github.com/human-ui/memo.git ~/memo
 #### Create DB directory
 
 ```
-mkdir ~/memo/store
-mkdir ~/memo/store/trash
+mkdir /data/memo-store
+mkdir /data/memo-store/trash
 ```
 
 #### Set env `MEMO`
 
 ```
-echo export MEMO="$HOME/memo/store" >> .profile
+echo export MEMO="$HOME/memo-store" >> .profile
 ```
 
 #### Add `memo` bin to path
