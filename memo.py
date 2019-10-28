@@ -169,7 +169,7 @@ class Local(object):
     def parser(self, args):
         return args
 
-    def gen_batch_script(self, command, prefix=None):
+    def gen_batch_script(self, command, working_dir, prefix=None):
         script = '#!/bin/sh'
         if prefix is not None:
             if not isinstance(prefix, (tuple, list)):
@@ -179,6 +179,7 @@ class Local(object):
         else:
             script = [script]
         script += ['',
+                   f'cd {working_dir}',
                    f'export MEMO_DIR={self.memo_dir}',
                    f'export PROJECT_PATH={self.project_path}']
         if not self.no_record:
@@ -230,7 +231,7 @@ class OpenMind(Local):
         self.args, script_args = parser.parse_known_args(args)
         return script_args
 
-    def gen_batch_script(self, command):
+    def gen_batch_script(self, command, working_dir):
         prefix = []
         for k, v in self.args.__dict__.items():
             key = k.replace('_', '-')
@@ -262,7 +263,7 @@ class OpenMind(Local):
                         f'--bind /home:/home --bind /om:/om --nv '
                         f'docker://nvidia/cuda:9.0-cudnn7-runtime-centos7 '
                         f'{command}')
-        return super().gen_batch_script(command, prefix=prefix)
+        return super().gen_batch_script(command, working_dir, prefix=prefix)
 
 
 class VSC(Local):
@@ -292,7 +293,7 @@ class VSC(Local):
         self.args, script_args = parser.parse_known_args(args)
         return script_args
 
-    def gen_batch_script(self, command):
+    def gen_batch_script(self, command, working_dir):
         l_options = ['time', 'pmem', 'pvmem', 'qos']
         l_list = []
         pbs = []
@@ -325,7 +326,7 @@ class VSC(Local):
         pbs.append(f'-e {self.memo_dir}/log.err')
         pbs = ' '.join(pbs)
 
-        return super().gen_batch_script(command,
+        return super().gen_batch_script(command, working_dir,
                                         prefix=(f'#PBS {pbs}', f'cd {self.memo_dir}'))
 
 
@@ -378,18 +379,6 @@ def main():
     sep = ' -- ' if ' -- ' not in script_args_str else ' '
     command = f'{ex} {args.script} {script_args_str}{sep}--memo_id {cluster.memo_id}'
 
-    # Prepare run.sh script
-    script = cluster.gen_batch_script(command)
-
-    # Define working dir where we will cd to
-    if remote:
-        working_dir = cluster.memo_dir
-    else:
-        if args.keep_cwd:
-            working_dir = os.getcwd()
-        else:
-            working_dir = os.path.expandvars(cluster.memo_dir)
-
     # get git details
     is_git_repo = get_local_output('git rev-parse --is-inside-work-tree')
     if is_git_repo == 'true':
@@ -401,9 +390,26 @@ def main():
                 remote_url = f'https://github.com/{repo}'
         else:
             remote_url = None
+        copy_path = get_local_output('git rev-parse --show-toplevel')
     else:
         git_commit = None
         remote_url = None
+        copy_path = os.listdir(os.getcwd())
+
+    # Define working dir where we will cd to
+    if remote:
+        run_dir = cluster.memo_dir
+    else:
+        if args.keep_cwd:
+            run_dir = os.getcwd()
+        else:
+            run_dir = os.path.expandvars(cluster.memo_dir)
+
+    diff = os.path.relpath(os.getcwd(), copy_path)
+    working_dir = os.path.join(run_dir, 'source', diff)
+
+    # Prepare run.sh script
+    script = cluster.gen_batch_script(command, working_dir)
 
     # Define what to store in meta.json
     rec = {'start time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -431,8 +437,8 @@ def main():
         else:  # local folder is already available
             local_memo_dir = cluster.memo_dir
         print('Local memo dir:', local_memo_dir)
-
-        shutil.copy2(sys.argv[2], local_memo_dir)
+        shutil.copytree(copy_path, os.path.join(local_memo_dir, 'source'))
+        
         with open(os.path.join(local_memo_dir, 'run.sh'), 'w') as f:
             f.write('\n'.join(script))
         with open(os.path.join(local_memo_dir, 'meta.json'), 'w') as meta_file:
@@ -448,7 +454,7 @@ def main():
     call_args = [cluster.executor, 'run.sh']
 
     if remote:
-        bash_cmd = f'cd {working_dir}; ' + ' '.join(call_args)
+        bash_cmd = f'cd {run_dir}; ' + ' '.join(call_args)
         if not args.dry:
             out = cluster.exec_remote(bash_cmd)        
             # if args.cluster == 'om':  # print job id
@@ -459,14 +465,14 @@ def main():
 
         if not args.follow:
             logfile = os.path.join(local_memo_dir, 'log.out')
-            subprocess.Popen(['nohup'] + call_args, cwd=working_dir,
+            subprocess.Popen(['nohup'] + call_args, cwd=run_dir,
                              stdin=subprocess.DEVNULL,
                              stdout=open(logfile, 'a'),
                              stderr=open(logfile, 'a'))
             time.sleep(1)
             subprocess.Popen(['cat', logfile])
         else:
-            p = subprocess.Popen(call_args, cwd=working_dir)
+            p = subprocess.Popen(call_args, cwd=run_dir)
             try:
                 p.wait()
             except KeyboardInterrupt:
