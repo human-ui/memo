@@ -370,7 +370,10 @@ def _read_rec(folder):
         if key in data:
             data['script args'] = ' '.join(data[key])
         else:
-            data['script args'] = data['full_command']
+            try:
+                data['script args'] = data['full command']
+            except:
+                data['script args'] = data['full_command']
         data['script'] = data.get('script', '')
         data['id'] = folder
     else:

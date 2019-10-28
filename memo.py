@@ -2,8 +2,6 @@
 import os, sys, argparse, configparser, datetime, getpass, json, shutil, glob, shlex
 import socket, subprocess, tempfile, time, importlib
 
-# import findimports
-
 DATA_DIR = os.environ['MEMO']
 CONFIG = configparser.ConfigParser()
 CONFIG.read(os.path.expanduser('~/.memo'))
@@ -49,30 +47,11 @@ def get_host_properties():
     return host, cluster, node
 
 
-def get_local_dependencies(filepath):
-    root = os.path.abspath(os.getcwd())
-    dependencies = []
-    modules = [m.name for m in findimports.find_imports(filepath)]
-    breakpoint()
-    while len(modules) > 0:
-        module = modules.pop(0)
-        spl = module.split('.')
-        if len(spl) > 0:
-            path = ''
-            for m in spl[:-1]:
-                j = '.'.join([path, m])
-                modules.append(j)
-                path = j
-        try:
-            spec = importlib.util.find_spec(module)
-            f = importlib.util.module_from_spec(spec).__file__
-        except:
-            pass
-        else:
-            if f.startswith(root) and f not in dependencies:
-                dependencies.append(f)
-                modules.extend([m.name for m in findimports.find_imports(f)])
-    return dependencies
+def get_local_output(command):
+    output = subprocess.run(command, shell=True, check=True,
+                          stdout=subprocess.PIPE).stdout
+    output = output.decode().strip('\n')
+    return output
 
 
 def exec_remote(command, user, host, wait=True):
@@ -388,9 +367,6 @@ def main():
     # Parse host-specific arguments
     script_args = cluster.parser(extra_args)
 
-    # get local dependencies
-    dependencies = glob.glob(os.path.join(os.getcwd(), '*.py')) #get_local_dependencies(args.script)
-
     # Form call command
     # if os.path.basename(args.executable) == 'python':
     #     ex = sys.executable
@@ -414,9 +390,25 @@ def main():
         else:
             working_dir = os.path.expandvars(cluster.memo_dir)
 
+    # get git details
+    is_git_repo = get_local_output('git rev-parse --is-inside-work-tree')
+    if is_git_repo == 'true':
+        git_commit = get_local_output('git rev-parse HEAD')
+        remote_url = get_local_output('git remote get-url origin')
+        if 'github.com' in remote_url:
+            if remote_url.startswith('git@github.com'):
+                repo = remote_url.split(":")[1][:-4]  # strip .git
+                remote_url = f'https://github.com/{repo}'
+        else:
+            remote_url = None
+    else:
+        git_commit = None
+        remote_url = None
+
     # Define what to store in meta.json
     rec = {'start time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-           'full_command': ' '.join(sys.argv),
+           'end time': None,
+           'full command': ' '.join(sys.argv),
            'local host': local_host,
            'working dir': os.path.abspath(os.getcwd()),
            'remote host': cluster.host,
@@ -424,8 +416,11 @@ def main():
            'cluster args': getattr(cluster.args, '__dict__', None),
            'script args': script_args,
            'outcome': '',
+           'github url': remote_url,
+           'git commit': git_commit,
            'show': True,
-           'memo_id': cluster.memo_id}
+           'memo_id': cluster.memo_id,
+           }
     rec.update(args.__dict__)    
 
     # Copy everything to memo_dir
@@ -438,8 +433,6 @@ def main():
         print('Local memo dir:', local_memo_dir)
 
         shutil.copy2(sys.argv[2], local_memo_dir)
-        for dep in dependencies:
-            shutil.copy2(dep, local_memo_dir)
         with open(os.path.join(local_memo_dir, 'run.sh'), 'w') as f:
             f.write('\n'.join(script))
         with open(os.path.join(local_memo_dir, 'meta.json'), 'w') as meta_file:
